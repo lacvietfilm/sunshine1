@@ -41,7 +41,7 @@ TÍNH NĂNG:
 ✓ Auto mở cửa trước + sau
 ✓ Auto đóng cửa
 ✓ Auto Release P
-✓ Selective No Collision (không xuyên đường)
+✓ Fly
 ✓ Boost
 ✓ Cruise Control
 ✓ Head Lights
@@ -72,6 +72,10 @@ local CONFIG = {
 	NormalSpeed = 60,
 	BoostSpeed = 95,
 
+	FlySpeed = 85,
+	FlyVerticalSpeed = 65,
+	FlyResponsiveness = 20,
+
 	CruiseMinSpeed = 15,
 	CruiseMaxSpeed = 75,
 
@@ -100,7 +104,7 @@ local Features = {
 	AutoPark = true,
 	AutoDoors = true,
 	AutoReleasePark = true,
-	NoCollision = false,
+	Fly = false,
 	Boost = false,
 	Cruise = false,
 	Lights = false,
@@ -348,247 +352,106 @@ local function disableFixLag()
 end
 
 ---------------------------------------------------------------------
--- SELECTIVE NO COLLISION SYSTEM - STRONG VERSION
+-- FLY SYSTEM
+-- W/S: tiến-lùi | A/D: trái-phải | Space: lên | LeftCtrl: xuống
 ---------------------------------------------------------------------
 
-local PhysicsService = game:GetService("PhysicsService")
+local flyAttachment = nil
+local flyVelocity = nil
+local flyOrientation = nil
 
-local BUS_GROUP = "AxiomBus"
-local OBSTACLE_GROUP = "AxiomObstacles"
-local ROAD_GROUP = "AxiomRoad"
-
-local collisionGroupBackup = {}
-local collisionScanTimer = 0
-local COLLISION_RESCAN_INTERVAL = 1.5
-
-local ROAD_KEYWORDS = {
-    "road","street","ground","floor","baseplate","bridge","ramp",
-    "highway","asphalt","pavement","driveway","parking","runway","lane"
-}
-
-local OBSTACLE_KEYWORDS = {
-    "building","house","wall","fence","barrier","obstacle","prop",
-    "tree","pole","lamp","sign","bench","trash","bin","gate","cone",
-    "rail","guard","block","bollard","terminal","station","shelter"
-}
-
-local function ensureCollisionGroup(name)
-    pcall(function()
-        PhysicsService:RegisterCollisionGroup(name)
-    end)
+local function getFlyRoot()
+    if not currentBus then return nil end
+    if currentBus.PrimaryPart then return currentBus.PrimaryPart end
+    if currentSeat and currentSeat:IsA("BasePart") then return currentSeat end
+    return currentBus:FindFirstChildWhichIsA("BasePart", true)
 end
 
-ensureCollisionGroup(BUS_GROUP)
-ensureCollisionGroup(OBSTACLE_GROUP)
-ensureCollisionGroup(ROAD_GROUP)
-
-pcall(function()
-    PhysicsService:CollisionGroupSetCollidable(BUS_GROUP, OBSTACLE_GROUP, false)
-    PhysicsService:CollisionGroupSetCollidable(BUS_GROUP, ROAD_GROUP, true)
-    PhysicsService:CollisionGroupSetCollidable(BUS_GROUP, "Default", true)
-end)
-
-local function containsKeyword(textValue, keywords)
-    local lower = string.lower(textValue)
-    for _, keyword in ipairs(keywords) do
-        if string.find(lower, keyword, 1, true) then
-            return true
-        end
-    end
-    return false
+local function destroyFlyObjects()
+    if flyVelocity then flyVelocity:Destroy(); flyVelocity=nil end
+    if flyOrientation then flyOrientation:Destroy(); flyOrientation=nil end
+    if flyAttachment then flyAttachment:Destroy(); flyAttachment=nil end
 end
 
-local function getFullObjectName(object)
-    local names = {}
-    local current = object
-    local depth = 0
+local function enableFly()
+    if not currentBus then Features.Fly=false; return end
+    local root=getFlyRoot()
+    if not root then Features.Fly=false; return end
+    destroyFlyObjects()
 
-    while current and current ~= workspace and depth < 8 do
-        table.insert(names, current.Name)
-        current = current.Parent
-        depth += 1
-    end
+    flyAttachment=Instance.new("Attachment")
+    flyAttachment.Name="AxiomFlyAttachment"
+    flyAttachment.Parent=root
 
-    return table.concat(names, " ")
+    flyVelocity=Instance.new("LinearVelocity")
+    flyVelocity.Name="AxiomFlyVelocity"
+    flyVelocity.Attachment0=flyAttachment
+    flyVelocity.RelativeTo=Enum.ActuatorRelativeTo.World
+    flyVelocity.VelocityConstraintMode=Enum.VelocityConstraintMode.Vector
+    flyVelocity.VectorVelocity=Vector3.zero
+    flyVelocity.MaxForce=math.huge
+    flyVelocity.Parent=root
+
+    flyOrientation=Instance.new("AlignOrientation")
+    flyOrientation.Name="AxiomFlyOrientation"
+    flyOrientation.Attachment0=flyAttachment
+    flyOrientation.Mode=Enum.OrientationAlignmentMode.OneAttachment
+    flyOrientation.MaxTorque=math.huge
+    flyOrientation.MaxAngularVelocity=math.huge
+    flyOrientation.Responsiveness=CONFIG.FlyResponsiveness
+    flyOrientation.RigidityEnabled=false
+    flyOrientation.Parent=root
+
+    parked=false
+    autoParking=false
+    processingStop=false
+    Features.Cruise=false
+    Features.Boost=false
+    cruiseSpeed=0
+    if currentSeat then currentSeat.MaxSpeed=CONFIG.NormalSpeed end
+    print("[AXIOM] Fly ON")
 end
 
-local function isInsideFolder(object, folderName)
-    local folder = workspace:FindFirstChild(folderName)
-    return folder and object:IsDescendantOf(folder) or false
+local function disableFly()
+    destroyFlyObjects()
+    print("[AXIOM] Fly OFF")
 end
 
-local function hasAttributeInAncestors(object, attrName)
-    local current = object
-    local depth = 0
+local function getFlyDirection()
+    local cam=workspace.CurrentCamera
+    if not cam then return Vector3.zero,0,Vector3.new(0,0,-1) end
+    local forward=Vector3.new(cam.CFrame.LookVector.X,0,cam.CFrame.LookVector.Z)
+    local right=Vector3.new(cam.CFrame.RightVector.X,0,cam.CFrame.RightVector.Z)
+    if forward.Magnitude>0 then forward=forward.Unit end
+    if right.Magnitude>0 then right=right.Unit end
 
-    while current and current ~= workspace and depth < 8 do
-        if current:GetAttribute(attrName) == true then
-            return true
-        end
-        current = current.Parent
-        depth += 1
-    end
+    local dir=Vector3.zero
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir+=forward end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir-=forward end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir+=right end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir-=right end
+    if dir.Magnitude>1 then dir=dir.Unit end
 
-    return false
+    local vertical=0
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then vertical+=1 end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then vertical-=1 end
+    return dir,vertical,forward
 end
 
-local function isRoadPart(part)
-    if not part:IsA("BasePart") then
-        return false
+local function updateFly()
+    if not Features.Fly or not currentBus then return end
+    local root=getFlyRoot()
+    if not root then return end
+    if not flyVelocity or not flyVelocity.Parent or not flyOrientation or not flyOrientation.Parent then
+        enableFly()
     end
-
-    if hasAttributeInAncestors(part, "AxiomRoad") then
-        return true
+    if not flyVelocity or not flyOrientation then return end
+    local dir,vertical,forward=getFlyDirection()
+    flyVelocity.VectorVelocity = dir*CONFIG.FlySpeed + Vector3.new(0,vertical*CONFIG.FlyVerticalSpeed,0)
+    if forward.Magnitude>0 then
+        local p=root.Position
+        flyOrientation.CFrame=CFrame.lookAt(p,p+forward,Vector3.yAxis)
     end
-
-    if hasAttributeInAncestors(part, "AxiomObstacle") then
-        return false
-    end
-
-    if isInsideFolder(part, "AxiomRoads") then
-        return true
-    end
-
-    if isInsideFolder(part, "AxiomObstacles") then
-        return false
-    end
-
-    local fullName = getFullObjectName(part)
-
-    if containsKeyword(fullName, ROAD_KEYWORDS) then
-        return true
-    end
-
-    local size = part.Size
-    if size.Y <= 8 and (size.X >= 30 or size.Z >= 30) then
-        return true
-    end
-
-    return false
-end
-
-local function isObstaclePart(part)
-    if not part:IsA("BasePart") then
-        return false
-    end
-
-    if currentBus and part:IsDescendantOf(currentBus) then
-        return false
-    end
-
-    if hasAttributeInAncestors(part, "AxiomObstacle") then
-        return true
-    end
-
-    if hasAttributeInAncestors(part, "AxiomRoad") then
-        return false
-    end
-
-    if isInsideFolder(part, "AxiomObstacles") then
-        return true
-    end
-
-    if isInsideFolder(part, "AxiomRoads") then
-        return false
-    end
-
-    if isRoadPart(part) then
-        return false
-    end
-
-    local fullName = getFullObjectName(part)
-    return containsKeyword(fullName, OBSTACLE_KEYWORDS)
-end
-
-local function saveCollisionGroup(part)
-    if collisionGroupBackup[part] == nil then
-        collisionGroupBackup[part] = part.CollisionGroup
-    end
-end
-
-local function setCollisionGroup(part, groupName)
-    if not part:IsA("BasePart") then
-        return
-    end
-
-    saveCollisionGroup(part)
-
-    pcall(function()
-        part.CollisionGroup = groupName
-    end)
-end
-
-local function configureBusCollision()
-    if not currentBus then
-        return
-    end
-
-    for _, object in ipairs(currentBus:GetDescendants()) do
-        if object:IsA("BasePart") then
-            setCollisionGroup(object, BUS_GROUP)
-        end
-    end
-end
-
-local function configureMapCollision()
-    local obstacleCount = 0
-    local roadCount = 0
-
-    for _, object in ipairs(workspace:GetDescendants()) do
-        if object:IsA("BasePart") then
-            if currentBus and object:IsDescendantOf(currentBus) then
-                continue
-            end
-
-            if isRoadPart(object) then
-                setCollisionGroup(object, ROAD_GROUP)
-                roadCount += 1
-            elseif isObstaclePart(object) then
-                setCollisionGroup(object, OBSTACLE_GROUP)
-                obstacleCount += 1
-            end
-        end
-    end
-
-    print("[AXIOM] Roads:", roadCount, "| Obstacles:", obstacleCount)
-end
-
-local function enableNoCollision()
-    if not currentBus then
-        return
-    end
-
-    configureBusCollision()
-    configureMapCollision()
-    print("[AXIOM] Selective No Collision ON")
-end
-
-local function keepNoCollisionActive(dt)
-    if not Features.NoCollision or not currentBus then
-        return
-    end
-
-    configureBusCollision()
-
-    collisionScanTimer += dt
-    if collisionScanTimer >= COLLISION_RESCAN_INTERVAL then
-        collisionScanTimer = 0
-        configureMapCollision()
-    end
-end
-
-local function disableNoCollision()
-    for object, oldGroup in pairs(collisionGroupBackup) do
-        if object and object.Parent and object:IsA("BasePart") then
-            pcall(function()
-                object.CollisionGroup = oldGroup
-            end)
-        end
-    end
-
-    table.clear(collisionGroupBackup)
-    collisionScanTimer = 0
-    print("[AXIOM] Selective No Collision OFF")
 end
 
 ---------------------------------------------------------------------
@@ -822,12 +685,8 @@ local function createToggle(label, feature)
 				disableFixLag()
 			end
 
-		elseif feature == "NoCollision" then
-			if Features.NoCollision then
-				enableNoCollision()
-			else
-				disableNoCollision()
-			end
+		elseif feature == "Fly" then
+			if Features.Fly then enableFly() else disableFly() end
 
 		elseif feature == "Lights" then
 			updateLights()
@@ -868,7 +727,7 @@ createToggle("Fix Lag", "FixLag")
 createToggle("Auto Park", "AutoPark")
 createToggle("Auto Doors", "AutoDoors")
 createToggle("Auto Release P", "AutoReleasePark")
-createToggle("No Collision", "NoCollision")
+createToggle("Fly", "Fly")
 createToggle("Boost", "Boost")
 createToggle("Cruise Control", "Cruise")
 createToggle("Head Lights", "Lights")
@@ -1131,8 +990,8 @@ end)
 ---------------------------------------------------------------------
 
 local function onVehicleChanged(newSeat)
-	if Features.NoCollision then
-		disableNoCollision()
+	if Features.Fly then
+		disableFly()
 	end
 
 	currentSeat = newSeat
@@ -1151,8 +1010,8 @@ local function onVehicleChanged(newSeat)
 	if currentSeat then
 		currentSeat.MaxSpeed = CONFIG.NormalSpeed
 
-		if Features.NoCollision then
-			enableNoCollision()
+		if Features.Fly then
+			enableFly()
 		end
 
 		if Features.Lights then
@@ -1205,15 +1064,18 @@ RunService.RenderStepped:Connect(function(dt)
 	-- KEEP NO COLLISION
 	-----------------------------------------------------------------
 
-	if Features.NoCollision then
-		keepNoCollisionActive(dt)
+	if Features.Fly then
+		updateFly()
 	end
 
 	-----------------------------------------------------------------
 	-- PARK / BOOST
 	-----------------------------------------------------------------
 
-	if parked then
+	if Features.Fly then
+		currentSeat.MaxSpeed = CONFIG.NormalSpeed
+
+	elseif parked then
 		currentSeat.MaxSpeed = 0
 
 		if speed < 3 then
@@ -1236,6 +1098,7 @@ RunService.RenderStepped:Connect(function(dt)
 	-----------------------------------------------------------------
 
 	if Features.Cruise
+		and not Features.Fly
 		and cruiseSpeed > 0
 		and not parked
 		and not autoParking
@@ -1261,6 +1124,7 @@ RunService.RenderStepped:Connect(function(dt)
 	-----------------------------------------------------------------
 
 	if Features.AutoPark
+		and not Features.Fly
 		and not parked
 		and not processingStop
 	then
@@ -1323,8 +1187,8 @@ end)
 ---------------------------------------------------------------------
 
 player.CharacterAdded:Connect(function()
-	if Features.NoCollision then
-		disableNoCollision()
+	if Features.Fly then
+		disableFly()
 	end
 
 	currentBus = nil
