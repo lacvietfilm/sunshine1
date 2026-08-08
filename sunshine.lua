@@ -348,21 +348,7 @@ local function disableFixLag()
 end
 
 ---------------------------------------------------------------------
--- SELECTIVE NO COLLISION SYSTEM
---
--- BUS vẫn va chạm:
--- ✓ Road / Street / Ground / Floor
--- ✓ Baseplate / Bridge / Ramp
--- ✓ Terrain và các vật thể Default chưa được đánh dấu obstacle
---
--- BUS xuyên:
--- ✓ Building / House / Wall / Fence
--- ✓ Barrier / Obstacle / Prop
--- ✓ Tree / Pole / Sign / Bench / Gate...
---
--- Cách chính xác nhất trong Roblox Studio:
--- Part cần xuyên     -> Attribute AxiomObstacle = true
--- Part cần giữ đường -> Attribute AxiomRoad = true
+-- SELECTIVE NO COLLISION SYSTEM - STRONG VERSION
 ---------------------------------------------------------------------
 
 local PhysicsService = game:GetService("PhysicsService")
@@ -373,45 +359,23 @@ local ROAD_GROUP = "AxiomRoad"
 
 local collisionGroupBackup = {}
 local collisionScanTimer = 0
-local COLLISION_RESCAN_INTERVAL = 2
+local COLLISION_RESCAN_INTERVAL = 1.5
 
 local ROAD_KEYWORDS = {
-	"road",
-	"street",
-	"ground",
-	"floor",
-	"baseplate",
-	"bridge",
-	"ramp",
-	"highway",
-	"asphalt",
-	"pavement",
-	"driveway",
-	"parking",
+    "road","street","ground","floor","baseplate","bridge","ramp",
+    "highway","asphalt","pavement","driveway","parking","runway","lane"
 }
 
 local OBSTACLE_KEYWORDS = {
-	"building",
-	"house",
-	"wall",
-	"fence",
-	"barrier",
-	"obstacle",
-	"prop",
-	"tree",
-	"pole",
-	"lamp",
-	"sign",
-	"bench",
-	"trash",
-	"bin",
-	"gate",
+    "building","house","wall","fence","barrier","obstacle","prop",
+    "tree","pole","lamp","sign","bench","trash","bin","gate","cone",
+    "rail","guard","block","bollard","terminal","station","shelter"
 }
 
 local function ensureCollisionGroup(name)
-	pcall(function()
-		PhysicsService:RegisterCollisionGroup(name)
-	end)
+    pcall(function()
+        PhysicsService:RegisterCollisionGroup(name)
+    end)
 end
 
 ensureCollisionGroup(BUS_GROUP)
@@ -419,242 +383,212 @@ ensureCollisionGroup(OBSTACLE_GROUP)
 ensureCollisionGroup(ROAD_GROUP)
 
 pcall(function()
-	-- Xe xuyên obstacle.
-	PhysicsService:CollisionGroupSetCollidable(
-		BUS_GROUP,
-		OBSTACLE_GROUP,
-		false
-	)
-
-	-- Xe vẫn bám mặt đường.
-	PhysicsService:CollisionGroupSetCollidable(
-		BUS_GROUP,
-		ROAD_GROUP,
-		true
-	)
-
-	-- Xe vẫn va chạm các part bình thường.
-	PhysicsService:CollisionGroupSetCollidable(
-		BUS_GROUP,
-		"Default",
-		true
-	)
+    PhysicsService:CollisionGroupSetCollidable(BUS_GROUP, OBSTACLE_GROUP, false)
+    PhysicsService:CollisionGroupSetCollidable(BUS_GROUP, ROAD_GROUP, true)
+    PhysicsService:CollisionGroupSetCollidable(BUS_GROUP, "Default", true)
 end)
 
 local function containsKeyword(textValue, keywords)
-	local lower = string.lower(textValue)
-
-	for _, keyword in ipairs(keywords) do
-		if string.find(lower, keyword, 1, true) then
-			return true
-		end
-	end
-
-	return false
+    local lower = string.lower(textValue)
+    for _, keyword in ipairs(keywords) do
+        if string.find(lower, keyword, 1, true) then
+            return true
+        end
+    end
+    return false
 end
 
 local function getFullObjectName(object)
-	local names = {}
-	local current = object
-	local depth = 0
+    local names = {}
+    local current = object
+    local depth = 0
 
-	while current
-		and current ~= workspace
-		and depth < 6
-	do
-		table.insert(names, current.Name)
-		current = current.Parent
-		depth += 1
-	end
+    while current and current ~= workspace and depth < 8 do
+        table.insert(names, current.Name)
+        current = current.Parent
+        depth += 1
+    end
 
-	return table.concat(names, " ")
+    return table.concat(names, " ")
+end
+
+local function isInsideFolder(object, folderName)
+    local folder = workspace:FindFirstChild(folderName)
+    return folder and object:IsDescendantOf(folder) or false
+end
+
+local function hasAttributeInAncestors(object, attrName)
+    local current = object
+    local depth = 0
+
+    while current and current ~= workspace and depth < 8 do
+        if current:GetAttribute(attrName) == true then
+            return true
+        end
+        current = current.Parent
+        depth += 1
+    end
+
+    return false
 end
 
 local function isRoadPart(part)
-	if not part:IsA("BasePart") then
-		return false
-	end
+    if not part:IsA("BasePart") then
+        return false
+    end
 
-	-- Override bằng Attribute.
-	if part:GetAttribute("AxiomRoad") == true then
-		return true
-	end
+    if hasAttributeInAncestors(part, "AxiomRoad") then
+        return true
+    end
 
-	if part:GetAttribute("AxiomObstacle") == true then
-		return false
-	end
+    if hasAttributeInAncestors(part, "AxiomObstacle") then
+        return false
+    end
 
-	local fullName = getFullObjectName(part)
+    if isInsideFolder(part, "AxiomRoads") then
+        return true
+    end
 
-	if containsKeyword(fullName, ROAD_KEYWORDS) then
-		return true
-	end
+    if isInsideFolder(part, "AxiomObstacles") then
+        return false
+    end
 
-	-- Heuristic an toàn:
-	-- các part rất rộng và tương đối mỏng thường là road/floor.
-	local size = part.Size
+    local fullName = getFullObjectName(part)
 
-	if size.Y <= 8
-		and (
-			size.X >= 30
-			or size.Z >= 30
-		)
-	then
-		return true
-	end
+    if containsKeyword(fullName, ROAD_KEYWORDS) then
+        return true
+    end
 
-	return false
+    local size = part.Size
+    if size.Y <= 8 and (size.X >= 30 or size.Z >= 30) then
+        return true
+    end
+
+    return false
 end
 
 local function isObstaclePart(part)
-	if not part:IsA("BasePart") then
-		return false
-	end
+    if not part:IsA("BasePart") then
+        return false
+    end
 
-	-- Không bao giờ tự đánh dấu part của chính xe là obstacle.
-	if currentBus
-		and part:IsDescendantOf(currentBus)
-	then
-		return false
-	end
+    if currentBus and part:IsDescendantOf(currentBus) then
+        return false
+    end
 
-	-- Override bằng Attribute.
-	if part:GetAttribute("AxiomObstacle") == true then
-		return true
-	end
+    if hasAttributeInAncestors(part, "AxiomObstacle") then
+        return true
+    end
 
-	if part:GetAttribute("AxiomRoad") == true then
-		return false
-	end
+    if hasAttributeInAncestors(part, "AxiomRoad") then
+        return false
+    end
 
-	-- Road luôn được ưu tiên giữ collision.
-	if isRoadPart(part) then
-		return false
-	end
+    if isInsideFolder(part, "AxiomObstacles") then
+        return true
+    end
 
-	local fullName = getFullObjectName(part)
+    if isInsideFolder(part, "AxiomRoads") then
+        return false
+    end
 
-	if containsKeyword(fullName, OBSTACLE_KEYWORDS) then
-		return true
-	end
+    if isRoadPart(part) then
+        return false
+    end
 
-	return false
+    local fullName = getFullObjectName(part)
+    return containsKeyword(fullName, OBSTACLE_KEYWORDS)
 end
 
 local function saveCollisionGroup(part)
-	if collisionGroupBackup[part] == nil then
-		collisionGroupBackup[part] = part.CollisionGroup
-	end
+    if collisionGroupBackup[part] == nil then
+        collisionGroupBackup[part] = part.CollisionGroup
+    end
 end
 
 local function setCollisionGroup(part, groupName)
-	if not part:IsA("BasePart") then
-		return
-	end
+    if not part:IsA("BasePart") then
+        return
+    end
 
-	saveCollisionGroup(part)
+    saveCollisionGroup(part)
 
-	pcall(function()
-		part.CollisionGroup = groupName
-	end)
+    pcall(function()
+        part.CollisionGroup = groupName
+    end)
 end
 
 local function configureBusCollision()
-	if not currentBus then
-		return
-	end
+    if not currentBus then
+        return
+    end
 
-	for _, object in ipairs(currentBus:GetDescendants()) do
-		if object:IsA("BasePart") then
-			setCollisionGroup(
-				object,
-				BUS_GROUP
-			)
-
-			-- Không set object.CanCollide = false.
-			-- Đây là điểm sửa lỗi xe xuyên xuống đường.
-		end
-	end
+    for _, object in ipairs(currentBus:GetDescendants()) do
+        if object:IsA("BasePart") then
+            setCollisionGroup(object, BUS_GROUP)
+        end
+    end
 end
 
 local function configureMapCollision()
-	for _, object in ipairs(workspace:GetDescendants()) do
-		if object:IsA("BasePart") then
+    local obstacleCount = 0
+    local roadCount = 0
 
-			if currentBus
-				and object:IsDescendantOf(currentBus)
-			then
-				continue
-			end
+    for _, object in ipairs(workspace:GetDescendants()) do
+        if object:IsA("BasePart") then
+            if currentBus and object:IsDescendantOf(currentBus) then
+                continue
+            end
 
-			if isRoadPart(object) then
-				setCollisionGroup(
-					object,
-					ROAD_GROUP
-				)
+            if isRoadPart(object) then
+                setCollisionGroup(object, ROAD_GROUP)
+                roadCount += 1
+            elseif isObstaclePart(object) then
+                setCollisionGroup(object, OBSTACLE_GROUP)
+                obstacleCount += 1
+            end
+        end
+    end
 
-			elseif isObstaclePart(object) then
-				setCollisionGroup(
-					object,
-					OBSTACLE_GROUP
-				)
-			end
-		end
-	end
+    print("[AXIOM] Roads:", roadCount, "| Obstacles:", obstacleCount)
 end
 
 local function enableNoCollision()
-	if not currentBus then
-		return
-	end
+    if not currentBus then
+        return
+    end
 
-	configureBusCollision()
-	configureMapCollision()
-
-	print(
-		"[AXIOM] Selective No Collision ON"
-	)
+    configureBusCollision()
+    configureMapCollision()
+    print("[AXIOM] Selective No Collision ON")
 end
 
 local function keepNoCollisionActive(dt)
-	if not Features.NoCollision
-		or not currentBus
-	then
-		return
-	end
+    if not Features.NoCollision or not currentBus then
+        return
+    end
 
-	-- Luôn đảm bảo các part của xe ở đúng group.
-	configureBusCollision()
+    configureBusCollision()
 
-	-- Không quét toàn map mỗi frame để tránh tăng lag.
-	collisionScanTimer += dt
-
-	if collisionScanTimer >= COLLISION_RESCAN_INTERVAL then
-		collisionScanTimer = 0
-		configureMapCollision()
-	end
+    collisionScanTimer += dt
+    if collisionScanTimer >= COLLISION_RESCAN_INTERVAL then
+        collisionScanTimer = 0
+        configureMapCollision()
+    end
 end
 
 local function disableNoCollision()
-	for object, oldGroup in pairs(
-		collisionGroupBackup
-	) do
-		if object
-			and object.Parent
-			and object:IsA("BasePart")
-		then
-			pcall(function()
-				object.CollisionGroup = oldGroup
-			end)
-		end
-	end
+    for object, oldGroup in pairs(collisionGroupBackup) do
+        if object and object.Parent and object:IsA("BasePart") then
+            pcall(function()
+                object.CollisionGroup = oldGroup
+            end)
+        end
+    end
 
-	table.clear(collisionGroupBackup)
-	collisionScanTimer = 0
-
-	print(
-		"[AXIOM] Selective No Collision OFF"
-	)
+    table.clear(collisionGroupBackup)
+    collisionScanTimer = 0
+    print("[AXIOM] Selective No Collision OFF")
 end
 
 ---------------------------------------------------------------------
