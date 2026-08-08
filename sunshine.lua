@@ -41,7 +41,8 @@ TÍNH NĂNG:
 ✓ Auto mở cửa trước + sau
 ✓ Auto đóng cửa
 ✓ Auto Release P
-✓ Fly
+✓ Fly bằng W/A/S/D + T/Ctrl
+✓ Slider chỉnh Fly Speed
 ✓ Boost
 ✓ Cruise Control
 ✓ Head Lights
@@ -73,7 +74,10 @@ local CONFIG = {
 	BoostSpeed = 95,
 
 	FlySpeed = 85,
+	FlySpeedMin = 20,
+	FlySpeedMax = 250,
 	FlyVerticalSpeed = 65,
+	FlyTurnSpeed = 95, -- degrees/second
 	FlyResponsiveness = 20,
 
 	CruiseMinSpeed = 15,
@@ -353,105 +357,206 @@ end
 
 ---------------------------------------------------------------------
 -- FLY SYSTEM
--- W/S: tiến-lùi | A/D: trái-phải | Space: lên | LeftCtrl: xuống
+--
+-- Điều khiển KHÔNG phụ thuộc chuột/camera:
+-- W           : bay tiến theo hướng đầu xe
+-- S           : bay lùi
+-- A           : xoay trái
+-- D           : xoay phải
+-- T           : bay lên
+-- LeftControl : hạ xuống
+--
+-- Tốc độ bay được chỉnh trực tiếp bằng slider trong UI.
 ---------------------------------------------------------------------
 
 local flyAttachment = nil
 local flyVelocity = nil
 local flyOrientation = nil
+local flyYaw = 0
 
 local function getFlyRoot()
-    if not currentBus then return nil end
-    if currentBus.PrimaryPart then return currentBus.PrimaryPart end
-    if currentSeat and currentSeat:IsA("BasePart") then return currentSeat end
-    return currentBus:FindFirstChildWhichIsA("BasePart", true)
+	if not currentBus then
+		return nil
+	end
+
+	if currentBus.PrimaryPart then
+		return currentBus.PrimaryPart
+	end
+
+	if currentSeat and currentSeat:IsA("BasePart") then
+		return currentSeat
+	end
+
+	return currentBus:FindFirstChildWhichIsA("BasePart", true)
 end
 
 local function destroyFlyObjects()
-    if flyVelocity then flyVelocity:Destroy(); flyVelocity=nil end
-    if flyOrientation then flyOrientation:Destroy(); flyOrientation=nil end
-    if flyAttachment then flyAttachment:Destroy(); flyAttachment=nil end
+	if flyVelocity then
+		flyVelocity:Destroy()
+		flyVelocity = nil
+	end
+
+	if flyOrientation then
+		flyOrientation:Destroy()
+		flyOrientation = nil
+	end
+
+	if flyAttachment then
+		flyAttachment:Destroy()
+		flyAttachment = nil
+	end
+end
+
+local function getYawFromCFrame(cf)
+	local look = cf.LookVector
+	return math.atan2(-look.X, -look.Z)
 end
 
 local function enableFly()
-    if not currentBus then Features.Fly=false; return end
-    local root=getFlyRoot()
-    if not root then Features.Fly=false; return end
-    destroyFlyObjects()
+	if not currentBus then
+		Features.Fly = false
+		return
+	end
 
-    flyAttachment=Instance.new("Attachment")
-    flyAttachment.Name="AxiomFlyAttachment"
-    flyAttachment.Parent=root
+	local root = getFlyRoot()
 
-    flyVelocity=Instance.new("LinearVelocity")
-    flyVelocity.Name="AxiomFlyVelocity"
-    flyVelocity.Attachment0=flyAttachment
-    flyVelocity.RelativeTo=Enum.ActuatorRelativeTo.World
-    flyVelocity.VelocityConstraintMode=Enum.VelocityConstraintMode.Vector
-    flyVelocity.VectorVelocity=Vector3.zero
-    flyVelocity.MaxForce=math.huge
-    flyVelocity.Parent=root
+	if not root then
+		Features.Fly = false
+		return
+	end
 
-    flyOrientation=Instance.new("AlignOrientation")
-    flyOrientation.Name="AxiomFlyOrientation"
-    flyOrientation.Attachment0=flyAttachment
-    flyOrientation.Mode=Enum.OrientationAlignmentMode.OneAttachment
-    flyOrientation.MaxTorque=math.huge
-    flyOrientation.MaxAngularVelocity=math.huge
-    flyOrientation.Responsiveness=CONFIG.FlyResponsiveness
-    flyOrientation.RigidityEnabled=false
-    flyOrientation.Parent=root
+	destroyFlyObjects()
 
-    parked=false
-    autoParking=false
-    processingStop=false
-    Features.Cruise=false
-    Features.Boost=false
-    cruiseSpeed=0
-    if currentSeat then currentSeat.MaxSpeed=CONFIG.NormalSpeed end
-    print("[AXIOM] Fly ON")
+	flyYaw = getYawFromCFrame(root.CFrame)
+
+	flyAttachment = Instance.new("Attachment")
+	flyAttachment.Name = "AxiomFlyAttachment"
+	flyAttachment.Parent = root
+
+	flyVelocity = Instance.new("LinearVelocity")
+	flyVelocity.Name = "AxiomFlyVelocity"
+	flyVelocity.Attachment0 = flyAttachment
+	flyVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+	flyVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+	flyVelocity.VectorVelocity = Vector3.zero
+	flyVelocity.MaxForce = math.huge
+	flyVelocity.Parent = root
+
+	flyOrientation = Instance.new("AlignOrientation")
+	flyOrientation.Name = "AxiomFlyOrientation"
+	flyOrientation.Attachment0 = flyAttachment
+	flyOrientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+	flyOrientation.MaxTorque = math.huge
+	flyOrientation.MaxAngularVelocity = math.huge
+	flyOrientation.Responsiveness = CONFIG.FlyResponsiveness
+	flyOrientation.RigidityEnabled = false
+	flyOrientation.Parent = root
+
+	parked = false
+	autoParking = false
+	processingStop = false
+
+	Features.Cruise = false
+	Features.Boost = false
+	cruiseSpeed = 0
+
+	if currentSeat then
+		currentSeat.MaxSpeed = CONFIG.NormalSpeed
+	end
+
+	print("[AXIOM] Fly ON")
 end
 
 local function disableFly()
-    destroyFlyObjects()
-    print("[AXIOM] Fly OFF")
+	destroyFlyObjects()
+
+	print("[AXIOM] Fly OFF")
 end
 
-local function getFlyDirection()
-    local cam=workspace.CurrentCamera
-    if not cam then return Vector3.zero,0,Vector3.new(0,0,-1) end
-    local forward=Vector3.new(cam.CFrame.LookVector.X,0,cam.CFrame.LookVector.Z)
-    local right=Vector3.new(cam.CFrame.RightVector.X,0,cam.CFrame.RightVector.Z)
-    if forward.Magnitude>0 then forward=forward.Unit end
-    if right.Magnitude>0 then right=right.Unit end
+local function updateFly(dt)
+	if not Features.Fly or not currentBus then
+		return
+	end
 
-    local dir=Vector3.zero
-    if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir+=forward end
-    if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir-=forward end
-    if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir+=right end
-    if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir-=right end
-    if dir.Magnitude>1 then dir=dir.Unit end
+	local root = getFlyRoot()
 
-    local vertical=0
-    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then vertical+=1 end
-    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then vertical-=1 end
-    return dir,vertical,forward
-end
+	if not root then
+		return
+	end
 
-local function updateFly()
-    if not Features.Fly or not currentBus then return end
-    local root=getFlyRoot()
-    if not root then return end
-    if not flyVelocity or not flyVelocity.Parent or not flyOrientation or not flyOrientation.Parent then
-        enableFly()
-    end
-    if not flyVelocity or not flyOrientation then return end
-    local dir,vertical,forward=getFlyDirection()
-    flyVelocity.VectorVelocity = dir*CONFIG.FlySpeed + Vector3.new(0,vertical*CONFIG.FlyVerticalSpeed,0)
-    if forward.Magnitude>0 then
-        local p=root.Position
-        flyOrientation.CFrame=CFrame.lookAt(p,p+forward,Vector3.yAxis)
-    end
+	if not flyVelocity
+		or not flyVelocity.Parent
+		or not flyOrientation
+		or not flyOrientation.Parent
+	then
+		enableFly()
+	end
+
+	if not flyVelocity or not flyOrientation then
+		return
+	end
+
+	-------------------------------------------------------------
+	-- A / D = ROTATE BUS
+	-------------------------------------------------------------
+
+	local turnInput = 0
+
+	if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+		turnInput += 1
+	end
+
+	if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+		turnInput -= 1
+	end
+
+	flyYaw += math.rad(CONFIG.FlyTurnSpeed) * turnInput * dt
+
+	local targetRotation = CFrame.Angles(0, flyYaw, 0)
+
+	flyOrientation.CFrame = targetRotation
+
+	-------------------------------------------------------------
+	-- W / S = FORWARD / BACKWARD
+	-------------------------------------------------------------
+
+	local forwardInput = 0
+
+	if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+		forwardInput += 1
+	end
+
+	if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+		forwardInput -= 1
+	end
+
+	local forward =
+		(targetRotation.LookVector * forwardInput)
+		* CONFIG.FlySpeed
+
+	-------------------------------------------------------------
+	-- T / LEFT CTRL = UP / DOWN
+	-------------------------------------------------------------
+
+	local verticalInput = 0
+
+	if UserInputService:IsKeyDown(Enum.KeyCode.T) then
+		verticalInput += 1
+	end
+
+	if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+		verticalInput -= 1
+	end
+
+	local vertical =
+		Vector3.new(
+			0,
+			verticalInput * CONFIG.FlyVerticalSpeed,
+			0
+		)
+
+	flyVelocity.VectorVelocity =
+		forward + vertical
 end
 
 ---------------------------------------------------------------------
@@ -728,6 +833,153 @@ createToggle("Auto Park", "AutoPark")
 createToggle("Auto Doors", "AutoDoors")
 createToggle("Auto Release P", "AutoReleasePark")
 createToggle("Fly", "Fly")
+
+---------------------------------------------------------------------
+-- FLY SPEED SLIDER
+---------------------------------------------------------------------
+
+local speedSlider = Instance.new("Frame")
+speedSlider.Name = "FlySpeedSlider"
+speedSlider.Size = UDim2.new(1, -5, 0, 58)
+speedSlider.BackgroundColor3 = Color3.fromRGB(24, 27, 35)
+speedSlider.BorderSizePixel = 0
+speedSlider.Parent = list
+
+local speedSliderCorner = Instance.new("UICorner")
+speedSliderCorner.CornerRadius = UDim.new(0, 10)
+speedSliderCorner.Parent = speedSlider
+
+local speedText = Instance.new("TextLabel")
+speedText.Position = UDim2.fromOffset(12, 5)
+speedText.Size = UDim2.new(1, -24, 0, 20)
+speedText.BackgroundTransparency = 1
+speedText.Font = Enum.Font.GothamMedium
+speedText.TextSize = 12
+speedText.TextColor3 = Color3.new(1, 1, 1)
+speedText.TextXAlignment = Enum.TextXAlignment.Left
+speedText.Parent = speedSlider
+
+local sliderTrack = Instance.new("Frame")
+sliderTrack.Position = UDim2.new(0, 12, 0, 35)
+sliderTrack.Size = UDim2.new(1, -24, 0, 7)
+sliderTrack.BackgroundColor3 = Color3.fromRGB(47, 52, 65)
+sliderTrack.BorderSizePixel = 0
+sliderTrack.Parent = speedSlider
+
+local sliderTrackCorner = Instance.new("UICorner")
+sliderTrackCorner.CornerRadius = UDim.new(1, 0)
+sliderTrackCorner.Parent = sliderTrack
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Size = UDim2.new(0, 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(70, 210, 120)
+sliderFill.BorderSizePixel = 0
+sliderFill.Parent = sliderTrack
+
+local sliderFillCorner = Instance.new("UICorner")
+sliderFillCorner.CornerRadius = UDim.new(1, 0)
+sliderFillCorner.Parent = sliderFill
+
+local sliderKnob = Instance.new("Frame")
+sliderKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+sliderKnob.Size = UDim2.fromOffset(16, 16)
+sliderKnob.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
+sliderKnob.BorderSizePixel = 0
+sliderKnob.Parent = sliderTrack
+
+local sliderKnobCorner = Instance.new("UICorner")
+sliderKnobCorner.CornerRadius = UDim.new(1, 0)
+sliderKnobCorner.Parent = sliderKnob
+
+local sliderDragging = false
+
+local function refreshSpeedSlider()
+	local minSpeed = CONFIG.FlySpeedMin
+	local maxSpeed = CONFIG.FlySpeedMax
+
+	CONFIG.FlySpeed = math.clamp(
+		CONFIG.FlySpeed,
+		minSpeed,
+		maxSpeed
+	)
+
+	local alpha =
+		(CONFIG.FlySpeed - minSpeed)
+		/ (maxSpeed - minSpeed)
+
+	speedText.Text =
+		"Fly Speed: "
+		.. tostring(math.floor(CONFIG.FlySpeed))
+		.. "  |  T lên • Ctrl xuống"
+
+	sliderFill.Size =
+		UDim2.new(alpha, 0, 1, 0)
+
+	sliderKnob.Position =
+		UDim2.new(alpha, 0, 0.5, 0)
+end
+
+local function setSpeedFromX(mouseX)
+	local absoluteX = sliderTrack.AbsolutePosition.X
+	local width = math.max(sliderTrack.AbsoluteSize.X, 1)
+
+	local alpha =
+		math.clamp(
+			(mouseX - absoluteX) / width,
+			0,
+			1
+		)
+
+	CONFIG.FlySpeed =
+		CONFIG.FlySpeedMin
+		+ (
+			CONFIG.FlySpeedMax
+			- CONFIG.FlySpeedMin
+		) * alpha
+
+	refreshSpeedSlider()
+end
+
+sliderTrack.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch
+	then
+		sliderDragging = true
+		setSpeedFromX(input.Position.X)
+	end
+end)
+
+sliderKnob.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch
+	then
+		sliderDragging = true
+		setSpeedFromX(input.Position.X)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not sliderDragging then
+		return
+	end
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch
+	then
+		setSpeedFromX(input.Position.X)
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch
+	then
+		sliderDragging = false
+	end
+end)
+
+refreshSpeedSlider()
+
 createToggle("Boost", "Boost")
 createToggle("Cruise Control", "Cruise")
 createToggle("Head Lights", "Lights")
@@ -1065,7 +1317,7 @@ RunService.RenderStepped:Connect(function(dt)
 	-----------------------------------------------------------------
 
 	if Features.Fly then
-		updateFly()
+		updateFly(dt)
 	end
 
 	-----------------------------------------------------------------
