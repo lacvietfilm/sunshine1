@@ -1,53 +1,39 @@
 --[[
 =====================================================================
-                    AXIOM BUS ASSIST - FULL
-                         SINGLE FILE
+                 AXIOM BUS ASSIST V2 - FULL FILE
 =====================================================================
 
-Dùng cho Roblox Studio / game của bạn.
+Dành cho Roblox Studio / place của bạn.
 
-Đặt file dưới dạng LocalScript tại:
+Đặt dưới dạng LocalScript:
 StarterPlayer
 └── StarterPlayerScripts
-    └── AxiomBusAssist.client.lua
+    └── AxiomSunshineBusAssist.client.lua
 
-Cấu trúc khuyến nghị:
+KEY:
+    SEPDEPTRAI
 
-Workspace
-├── Buses
-│   └── <Bus Model>
-│       ├── VehicleSeat
-│       ├── FrontDoor
-│       │   └── HingeConstraint
-│       ├── RearDoor
-│       │   └── HingeConstraint
-│       └── HeadLights
-│           └── ... Light objects
-│
-└── BusStops
-    ├── Stop01
-    ├── Stop02
-    └── ...
-
-Mỗi BusStop có thể thêm Attribute:
-StopName = "Tên trạm"
+TỐC ĐỘ:
+    - Tốc độ gốc: 75
+    - Slider Bus Speed: 75 -> 300
+    - Kéo slider lên để tăng giới hạn tốc độ
 
 TÍNH NĂNG:
-✓ UI kéo được
-✓ Thu nhỏ UI
-✓ RightShift ẩn/hiện UI
-✓ Fix Lag
-✓ Auto Park
-✓ Auto mở cửa trước + sau
-✓ Auto đóng cửa
-✓ Auto Release P
-✓ Fly bằng W/A/S/D + T/Ctrl
-✓ Slider chỉnh Fly Speed
-✓ Boost
-✓ Cruise Control
-✓ Head Lights
-✓ Park / Release P thủ công
-✓ Trạng thái Bus / Speed / Gear / Auto Park trên UI
+    - Key UI
+    - Bus Speed slider
+    - Noclip Bus
+    - Boost
+    - Cruise Control
+    - Fly Bus
+    - Fly Speed slider
+    - Fix Lag
+    - Auto Park
+    - Auto Doors
+    - Auto Release P
+    - Head Lights
+    - Front / Rear Door
+    - Manual Park
+    - RightShift: ẩn / hiện UI
 =====================================================================
 ]]
 
@@ -59,6 +45,8 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
+local TweenService = game:GetService("TweenService")
+local StarterGui = game:GetService("StarterGui")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -68,35 +56,41 @@ local playerGui = player:WaitForChild("PlayerGui")
 ---------------------------------------------------------------------
 
 local CONFIG = {
+	MasterKey = "SEPDEPTRAI",
 	UIKey = Enum.KeyCode.RightShift,
 
-	NormalSpeed = 60,
-	BoostSpeed = 95,
+	-- Speed
+	BaseSpeed = 75,
+	BusSpeedMin = 75,
+	BusSpeedMax = 300,
+	BusSpeed = 75,
+	BoostSpeed = 110,
 
+	-- Fly
 	FlySpeed = 85,
 	FlySpeedMin = 20,
 	FlySpeedMax = 250,
 	FlyVerticalSpeed = 65,
-	FlyTurnSpeed = 95, -- degrees/second
+	FlyTurnSpeed = 95,
 	FlyResponsiveness = 20,
 
+	-- Cruise
 	CruiseMinSpeed = 15,
-	CruiseMaxSpeed = 75,
 
+	-- Auto park
 	AutoParkTriggerDistance = 22,
 	AutoParkMaxSpeed = 40,
 	ParkSpeedThreshold = 1.2,
 	BrakeFactor = 0.88,
-
 	StopDuration = 6,
 	DoorCloseDelay = 1.4,
+	StopCooldown = 5,
 
+	-- Doors
 	DoorOpenAngle = 85,
 	DoorClosedAngle = 0,
 	DoorSpeed = 3,
 	DoorTorque = 100000,
-
-	StopCooldown = 5,
 }
 
 ---------------------------------------------------------------------
@@ -105,12 +99,15 @@ local CONFIG = {
 
 local Features = {
 	FixLag = false,
+
 	AutoPark = true,
 	AutoDoors = true,
 	AutoReleasePark = true,
-	Fly = false,
+
+	NoclipBus = false,
 	Boost = false,
 	Cruise = false,
+	Fly = false,
 	Lights = false,
 }
 
@@ -126,10 +123,10 @@ local parked = false
 local autoParking = false
 local processingStop = false
 
-local cruiseSpeed = 0
-
 local frontDoorOpen = false
 local rearDoorOpen = false
+
+local cruiseSpeed = 0
 
 local lastStop = nil
 local lastStopTime = 0
@@ -138,13 +135,25 @@ local lastStopTime = 0
 -- HELPERS
 ---------------------------------------------------------------------
 
+local function notify(title, text)
+	pcall(function()
+		StarterGui:SetCore("SendNotification", {
+			Title = title,
+			Text = text,
+			Duration = 3,
+		})
+	end)
+end
+
 local function getPlayerVehicleSeat()
 	local character = player.Character
+
 	if not character then
 		return nil
 	end
 
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
+
 	if not humanoid then
 		return nil
 	end
@@ -192,6 +201,36 @@ local function studsPerSecondToKmh(speed)
 	return math.floor(speed * 1.008 + 0.5)
 end
 
+local function getSelectedBusSpeed()
+	return math.clamp(
+		CONFIG.BusSpeed,
+		CONFIG.BusSpeedMin,
+		CONFIG.BusSpeedMax
+	)
+end
+
+local function getCurrentSpeedLimit()
+	if parked or frontDoorOpen or rearDoorOpen then
+		return 0
+	end
+
+	if Features.Fly then
+		return CONFIG.BaseSpeed
+	end
+
+	if Features.Boost then
+		return math.max(CONFIG.BoostSpeed, getSelectedBusSpeed())
+	end
+
+	return getSelectedBusSpeed()
+end
+
+local function applySpeedLimit()
+	if currentSeat then
+		currentSeat.MaxSpeed = getCurrentSpeedLimit()
+	end
+end
+
 ---------------------------------------------------------------------
 -- DOOR SYSTEM
 ---------------------------------------------------------------------
@@ -202,6 +241,7 @@ local function findDoorHinge(name)
 	end
 
 	local door = currentBus:FindFirstChild(name, true)
+
 	if not door then
 		return nil
 	end
@@ -213,7 +253,7 @@ local function setDoor(name, open)
 	local hinge = findDoorHinge(name)
 
 	if not hinge then
-		warn("[AXIOM] Không tìm thấy HingeConstraint:", name)
+		warn("[AXIOM] Không tìm thấy cửa:", name)
 		return false
 	end
 
@@ -228,6 +268,7 @@ local function setDoor(name, open)
 		rearDoorOpen = open
 	end
 
+	applySpeedLimit()
 	return true
 end
 
@@ -253,7 +294,6 @@ local function setPark(enabled)
 	parked = enabled
 
 	if enabled then
-		Features.Boost = false
 		Features.Cruise = false
 		cruiseSpeed = 0
 
@@ -264,12 +304,12 @@ local function setPark(enabled)
 			currentSeat.AssemblyAngularVelocity = Vector3.zero
 		end
 	else
-		currentSeat.MaxSpeed = CONFIG.NormalSpeed
+		applySpeedLimit()
 	end
 end
 
 ---------------------------------------------------------------------
--- LIGHT SYSTEM
+-- LIGHTS
 ---------------------------------------------------------------------
 
 local function updateLights()
@@ -292,7 +332,7 @@ local function updateLights()
 end
 
 ---------------------------------------------------------------------
--- FIX LAG SYSTEM
+-- FIX LAG
 ---------------------------------------------------------------------
 
 local lagBackup = {
@@ -352,21 +392,66 @@ local function disableFixLag()
 
 	table.clear(lagBackup.Effects)
 	table.clear(lagBackup.Parts)
+
 	lagBackup.GlobalShadows = nil
 end
 
 ---------------------------------------------------------------------
+-- BUS NOCLIP
+---------------------------------------------------------------------
+
+local collisionBackup = {}
+
+local function backupCollision(part)
+	if collisionBackup[part] == nil then
+		collisionBackup[part] = {
+			CanCollide = part.CanCollide,
+			CanTouch = part.CanTouch,
+			CanQuery = part.CanQuery,
+		}
+	end
+end
+
+local function applyBusNoclip()
+	if not currentBus then
+		return
+	end
+
+	for _, object in ipairs(currentBus:GetDescendants()) do
+		if object:IsA("BasePart") then
+			backupCollision(object)
+			object.CanCollide = false
+		end
+	end
+end
+
+local function restoreBusCollision()
+	for part, old in pairs(collisionBackup) do
+		if part and part.Parent and part:IsA("BasePart") then
+			part.CanCollide = old.CanCollide
+
+			pcall(function()
+				part.CanTouch = old.CanTouch
+				part.CanQuery = old.CanQuery
+			end)
+		end
+	end
+
+	table.clear(collisionBackup)
+end
+
+local function setBusNoclip(enabled)
+	Features.NoclipBus = enabled
+
+	if enabled then
+		applyBusNoclip()
+	else
+		restoreBusCollision()
+	end
+end
+
+---------------------------------------------------------------------
 -- FLY SYSTEM
---
--- Điều khiển KHÔNG phụ thuộc chuột/camera:
--- W           : bay tiến theo hướng đầu xe
--- S           : bay lùi
--- A           : xoay trái
--- D           : xoay phải
--- T           : bay lên
--- LeftControl : hạ xuống
---
--- Tốc độ bay được chỉnh trực tiếp bằng slider trong UI.
 ---------------------------------------------------------------------
 
 local flyAttachment = nil
@@ -455,22 +540,15 @@ local function enableFly()
 	parked = false
 	autoParking = false
 	processingStop = false
-
 	Features.Cruise = false
-	Features.Boost = false
 	cruiseSpeed = 0
 
-	if currentSeat then
-		currentSeat.MaxSpeed = CONFIG.NormalSpeed
-	end
-
-	print("[AXIOM] Fly ON")
+	applySpeedLimit()
 end
 
 local function disableFly()
 	destroyFlyObjects()
-
-	print("[AXIOM] Fly OFF")
+	applySpeedLimit()
 end
 
 local function updateFly(dt)
@@ -496,10 +574,6 @@ local function updateFly(dt)
 		return
 	end
 
-	-------------------------------------------------------------
-	-- A / D = ROTATE BUS
-	-------------------------------------------------------------
-
 	local turnInput = 0
 
 	if UserInputService:IsKeyDown(Enum.KeyCode.A) then
@@ -516,10 +590,6 @@ local function updateFly(dt)
 
 	flyOrientation.CFrame = targetRotation
 
-	-------------------------------------------------------------
-	-- W / S = FORWARD / BACKWARD
-	-------------------------------------------------------------
-
 	local forwardInput = 0
 
 	if UserInputService:IsKeyDown(Enum.KeyCode.W) then
@@ -531,12 +601,9 @@ local function updateFly(dt)
 	end
 
 	local forward =
-		(targetRotation.LookVector * forwardInput)
+		targetRotation.LookVector
+		* forwardInput
 		* CONFIG.FlySpeed
-
-	-------------------------------------------------------------
-	-- T / LEFT CTRL = UP / DOWN
-	-------------------------------------------------------------
 
 	local verticalInput = 0
 
@@ -555,8 +622,7 @@ local function updateFly(dt)
 			0
 		)
 
-	flyVelocity.VectorVelocity =
-		forward + vertical
+	flyVelocity.VectorVelocity = forward + vertical
 end
 
 ---------------------------------------------------------------------
@@ -583,7 +649,8 @@ local function getNearestStop()
 
 	for _, stop in ipairs(folder:GetChildren()) do
 		if stop:IsA("BasePart") then
-			local distance = (currentSeat.Position - stop.Position).Magnitude
+			local distance =
+				(currentSeat.Position - stop.Position).Magnitude
 
 			if distance < nearestDistance then
 				nearest = stop
@@ -603,29 +670,95 @@ local function getStopName(stop)
 	return stop:GetAttribute("StopName") or stop.Name
 end
 
+local function performAutoStop(stop)
+	if processingStop
+		or autoParking
+		or not currentSeat
+		or not stop
+	then
+		return
+	end
+
+	processingStop = true
+	autoParking = true
+
+	local thisStop = stop
+
+	while currentSeat
+		and currentBus
+		and thisStop.Parent
+		and getBusSpeed() > CONFIG.ParkSpeedThreshold
+	do
+		currentSeat.AssemblyLinearVelocity *= CONFIG.BrakeFactor
+		task.wait()
+	end
+
+	if not currentSeat then
+		processingStop = false
+		autoParking = false
+		return
+	end
+
+	currentSeat.AssemblyLinearVelocity = Vector3.zero
+	currentSeat.AssemblyAngularVelocity = Vector3.zero
+
+	setPark(true)
+
+	lastStop = thisStop
+	lastStopTime = os.clock()
+	autoParking = false
+
+	if Features.AutoDoors then
+		openDoors()
+	end
+
+	task.wait(CONFIG.StopDuration)
+
+	if Features.AutoDoors then
+		closeDoors()
+		task.wait(CONFIG.DoorCloseDelay)
+	end
+
+	if Features.AutoReleasePark then
+		setPark(false)
+	end
+
+	processingStop = false
+end
+
 ---------------------------------------------------------------------
--- UI
+-- CLEAN OLD UI
 ---------------------------------------------------------------------
 
-local oldGui = playerGui:FindFirstChild("AxiomBusAssist")
+local oldGui = playerGui:FindFirstChild("AxiomBusAssistV2")
+
 if oldGui then
 	oldGui:Destroy()
 end
 
+---------------------------------------------------------------------
+-- GUI ROOT
+---------------------------------------------------------------------
+
 local gui = Instance.new("ScreenGui")
-gui.Name = "AxiomBusAssist"
+gui.Name = "AxiomBusAssistV2"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = false
 gui.DisplayOrder = 9999
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = playerGui
 
+---------------------------------------------------------------------
+-- MAIN WINDOW
+---------------------------------------------------------------------
+
 local main = Instance.new("Frame")
 main.Name = "Main"
-main.Size = UDim2.fromOffset(365, 520)
-main.Position = UDim2.new(0, 25, 0.5, -260)
+main.Size = UDim2.fromOffset(380, 560)
+main.Position = UDim2.new(0, 25, 0.5, -280)
 main.BackgroundColor3 = Color3.fromRGB(15, 17, 22)
 main.BorderSizePixel = 0
+main.Visible = false
 main.Parent = gui
 
 local mainCorner = Instance.new("UICorner")
@@ -652,7 +785,7 @@ local title = Instance.new("TextLabel")
 title.Position = UDim2.fromOffset(18, 9)
 title.Size = UDim2.new(1, -85, 0, 24)
 title.BackgroundTransparency = 1
-title.Text = "AXIOM BUS ASSIST"
+title.Text = "AXIOM BUS ASSIST V2"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 17
@@ -663,7 +796,7 @@ local subtitle = Instance.new("TextLabel")
 subtitle.Position = UDim2.fromOffset(18, 33)
 subtitle.Size = UDim2.new(1, -85, 0, 16)
 subtitle.BackgroundTransparency = 1
-subtitle.Text = "SYSTEM • ONLINE"
+subtitle.Text = "BASE SPEED 75 • ONLINE"
 subtitle.TextColor3 = Color3.fromRGB(90, 240, 145)
 subtitle.Font = Enum.Font.GothamMedium
 subtitle.TextSize = 11
@@ -691,7 +824,7 @@ minimizeCorner.Parent = minimize
 
 local status = Instance.new("TextLabel")
 status.Position = UDim2.fromOffset(18, 64)
-status.Size = UDim2.new(1, -36, 0, 84)
+status.Size = UDim2.new(1, -36, 0, 106)
 status.BackgroundColor3 = Color3.fromRGB(22, 25, 32)
 status.BorderSizePixel = 0
 status.TextColor3 = Color3.fromRGB(195, 205, 215)
@@ -699,7 +832,7 @@ status.Font = Enum.Font.Code
 status.TextSize = 12
 status.TextXAlignment = Enum.TextXAlignment.Left
 status.TextYAlignment = Enum.TextYAlignment.Top
-status.Text = "BUS       : WAITING\nSPEED     : 0 KM/H\nGEAR      : -\nAUTO PARK : READY"
+status.Text = "BUS       : WAITING\nSPEED     : 0 KM/H\nLIMIT     : 75\nGEAR      : -\nAUTO PARK : READY"
 status.Parent = main
 
 local statusCorner = Instance.new("UICorner")
@@ -711,8 +844,8 @@ statusCorner.Parent = status
 ---------------------------------------------------------------------
 
 local list = Instance.new("ScrollingFrame")
-list.Position = UDim2.fromOffset(18, 162)
-list.Size = UDim2.new(1, -36, 1, -180)
+list.Position = UDim2.fromOffset(18, 184)
+list.Size = UDim2.new(1, -36, 1, -202)
 list.BackgroundTransparency = 1
 list.BorderSizePixel = 0
 list.ScrollBarThickness = 4
@@ -745,6 +878,7 @@ end
 
 local function refreshButton(feature)
 	local data = buttons[feature]
+
 	if not data then
 		return
 	end
@@ -790,15 +924,28 @@ local function createToggle(label, feature)
 				disableFixLag()
 			end
 
+		elseif feature == "NoclipBus" then
+			setBusNoclip(Features.NoclipBus)
+
 		elseif feature == "Fly" then
-			if Features.Fly then enableFly() else disableFly() end
+			if Features.Fly then
+				enableFly()
+			else
+				disableFly()
+			end
 
 		elseif feature == "Lights" then
 			updateLights()
 
+		elseif feature == "Boost" then
+			applySpeedLimit()
+
 		elseif feature == "Cruise" then
 			if Features.Cruise then
-				if not currentSeat or parked or processingStop then
+				if not currentSeat
+					or parked
+					or processingStop
+				then
 					Features.Cruise = false
 				else
 					local speed = getBusSpeed()
@@ -807,7 +954,7 @@ local function createToggle(label, feature)
 						cruiseSpeed = math.clamp(
 							speed,
 							CONFIG.CruiseMinSpeed,
-							CONFIG.CruiseMaxSpeed
+							getSelectedBusSpeed()
 						)
 					else
 						Features.Cruise = false
@@ -825,406 +972,465 @@ local function createToggle(label, feature)
 end
 
 ---------------------------------------------------------------------
--- TOGGLE BUTTONS
+-- TOGGLES
 ---------------------------------------------------------------------
 
 createToggle("Fix Lag", "FixLag")
 createToggle("Auto Park", "AutoPark")
 createToggle("Auto Doors", "AutoDoors")
 createToggle("Auto Release P", "AutoReleasePark")
+createToggle("Bus Noclip", "NoclipBus")
+createToggle("Boost", "Boost")
+createToggle("Cruise Control", "Cruise")
 createToggle("Fly", "Fly")
+createToggle("Head Lights", "Lights")
+
+---------------------------------------------------------------------
+-- GENERIC SLIDER FACTORY
+---------------------------------------------------------------------
+
+local function createSlider(name, label, minValue, maxValue, getValue, setValue, accent)
+	local holder = Instance.new("Frame")
+	holder.Name = name
+	holder.Size = UDim2.new(1, -5, 0, 62)
+	holder.BackgroundColor3 = Color3.fromRGB(24, 27, 35)
+	holder.BorderSizePixel = 0
+	holder.Parent = list
+
+	local holderCorner = Instance.new("UICorner")
+	holderCorner.CornerRadius = UDim.new(0, 10)
+	holderCorner.Parent = holder
+
+	local valueText = Instance.new("TextLabel")
+	valueText.Position = UDim2.fromOffset(12, 5)
+	valueText.Size = UDim2.new(1, -24, 0, 20)
+	valueText.BackgroundTransparency = 1
+	valueText.Font = Enum.Font.GothamMedium
+	valueText.TextSize = 12
+	valueText.TextColor3 = Color3.new(1, 1, 1)
+	valueText.TextXAlignment = Enum.TextXAlignment.Left
+	valueText.Parent = holder
+
+	local track = Instance.new("Frame")
+	track.Position = UDim2.new(0, 12, 0, 38)
+	track.Size = UDim2.new(1, -24, 0, 7)
+	track.BackgroundColor3 = Color3.fromRGB(47, 52, 65)
+	track.BorderSizePixel = 0
+	track.Active = true
+	track.Parent = holder
+
+	local trackCorner = Instance.new("UICorner")
+	trackCorner.CornerRadius = UDim.new(1, 0)
+	trackCorner.Parent = track
+
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.new(0, 0, 1, 0)
+	fill.BackgroundColor3 = accent
+	fill.BorderSizePixel = 0
+	fill.Parent = track
+
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(1, 0)
+	fillCorner.Parent = fill
+
+	local knob = Instance.new("Frame")
+	knob.AnchorPoint = Vector2.new(0.5, 0.5)
+	knob.Position = UDim2.new(0, 0, 0.5, 0)
+	knob.Size = UDim2.fromOffset(16, 16)
+	knob.BackgroundColor3 = Color3.fromRGB(235, 240, 255)
+	knob.BorderSizePixel = 0
+	knob.Active = true
+	knob.Parent = track
+
+	local knobCorner = Instance.new("UICorner")
+	knobCorner.CornerRadius = UDim.new(1, 0)
+	knobCorner.Parent = knob
+
+	local dragging = false
+
+	local function refresh()
+		local value = math.clamp(getValue(), minValue, maxValue)
+		local alpha = (value - minValue) / (maxValue - minValue)
+
+		valueText.Text =
+			label
+			.. ": "
+			.. tostring(math.floor(value + 0.5))
+
+		fill.Size = UDim2.new(alpha, 0, 1, 0)
+		knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+	end
+
+	local function updateFromX(x)
+		local width = math.max(track.AbsoluteSize.X, 1)
+		local alpha = math.clamp(
+			(x - track.AbsolutePosition.X) / width,
+			0,
+			1
+		)
+
+		local value =
+			minValue
+			+ ((maxValue - minValue) * alpha)
+
+		setValue(value)
+		refresh()
+	end
+
+	local function begin(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			dragging = true
+			updateFromX(input.Position.X)
+		end
+	end
+
+	track.InputBegan:Connect(begin)
+	knob.InputBegan:Connect(begin)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragging then
+			return
+		end
+
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			updateFromX(input.Position.X)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			dragging = false
+		end
+	end)
+
+	refresh()
+
+	return {
+		Refresh = refresh,
+	}
+end
+
+---------------------------------------------------------------------
+-- BUS SPEED SLIDER: 75 -> 300
+---------------------------------------------------------------------
+
+local busSpeedSlider = createSlider(
+	"BusSpeedSlider",
+	"Bus Speed Limit",
+	CONFIG.BusSpeedMin,
+	CONFIG.BusSpeedMax,
+
+	function()
+		return CONFIG.BusSpeed
+	end,
+
+	function(value)
+		CONFIG.BusSpeed = math.clamp(
+			math.floor(value + 0.5),
+			CONFIG.BusSpeedMin,
+			CONFIG.BusSpeedMax
+		)
+
+		applySpeedLimit()
+
+		if Features.Cruise and cruiseSpeed > CONFIG.BusSpeed then
+			cruiseSpeed = CONFIG.BusSpeed
+		end
+	end,
+
+	Color3.fromRGB(80, 150, 255)
+)
 
 ---------------------------------------------------------------------
 -- FLY SPEED SLIDER
 ---------------------------------------------------------------------
 
-local speedSlider = Instance.new("Frame")
-speedSlider.Name = "FlySpeedSlider"
-speedSlider.Size = UDim2.new(1, -5, 0, 58)
-speedSlider.BackgroundColor3 = Color3.fromRGB(24, 27, 35)
-speedSlider.BorderSizePixel = 0
-speedSlider.Parent = list
+local flySpeedSlider = createSlider(
+	"FlySpeedSlider",
+	"Fly Speed",
+	CONFIG.FlySpeedMin,
+	CONFIG.FlySpeedMax,
 
-local speedSliderCorner = Instance.new("UICorner")
-speedSliderCorner.CornerRadius = UDim.new(0, 10)
-speedSliderCorner.Parent = speedSlider
+	function()
+		return CONFIG.FlySpeed
+	end,
 
-local speedText = Instance.new("TextLabel")
-speedText.Position = UDim2.fromOffset(12, 5)
-speedText.Size = UDim2.new(1, -24, 0, 20)
-speedText.BackgroundTransparency = 1
-speedText.Font = Enum.Font.GothamMedium
-speedText.TextSize = 12
-speedText.TextColor3 = Color3.new(1, 1, 1)
-speedText.TextXAlignment = Enum.TextXAlignment.Left
-speedText.Parent = speedSlider
-
-local sliderTrack = Instance.new("Frame")
-sliderTrack.Position = UDim2.new(0, 12, 0, 35)
-sliderTrack.Size = UDim2.new(1, -24, 0, 7)
-sliderTrack.BackgroundColor3 = Color3.fromRGB(47, 52, 65)
-sliderTrack.BorderSizePixel = 0
-sliderTrack.Parent = speedSlider
-
-local sliderTrackCorner = Instance.new("UICorner")
-sliderTrackCorner.CornerRadius = UDim.new(1, 0)
-sliderTrackCorner.Parent = sliderTrack
-
-local sliderFill = Instance.new("Frame")
-sliderFill.Size = UDim2.new(0, 0, 1, 0)
-sliderFill.BackgroundColor3 = Color3.fromRGB(70, 210, 120)
-sliderFill.BorderSizePixel = 0
-sliderFill.Parent = sliderTrack
-
-local sliderFillCorner = Instance.new("UICorner")
-sliderFillCorner.CornerRadius = UDim.new(1, 0)
-sliderFillCorner.Parent = sliderFill
-
-local sliderKnob = Instance.new("Frame")
-sliderKnob.AnchorPoint = Vector2.new(0.5, 0.5)
-sliderKnob.Size = UDim2.fromOffset(16, 16)
-sliderKnob.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
-sliderKnob.BorderSizePixel = 0
-sliderKnob.Parent = sliderTrack
-
-local sliderKnobCorner = Instance.new("UICorner")
-sliderKnobCorner.CornerRadius = UDim.new(1, 0)
-sliderKnobCorner.Parent = sliderKnob
-
-local sliderDragging = false
-
-local function refreshSpeedSlider()
-	local minSpeed = CONFIG.FlySpeedMin
-	local maxSpeed = CONFIG.FlySpeedMax
-
-	CONFIG.FlySpeed = math.clamp(
-		CONFIG.FlySpeed,
-		minSpeed,
-		maxSpeed
-	)
-
-	local alpha =
-		(CONFIG.FlySpeed - minSpeed)
-		/ (maxSpeed - minSpeed)
-
-	speedText.Text =
-		"Fly Speed: "
-		.. tostring(math.floor(CONFIG.FlySpeed))
-		.. "  |  T lên • Ctrl xuống"
-
-	sliderFill.Size =
-		UDim2.new(alpha, 0, 1, 0)
-
-	sliderKnob.Position =
-		UDim2.new(alpha, 0, 0.5, 0)
-end
-
-local function setSpeedFromX(mouseX)
-	local absoluteX = sliderTrack.AbsolutePosition.X
-	local width = math.max(sliderTrack.AbsoluteSize.X, 1)
-
-	local alpha =
-		math.clamp(
-			(mouseX - absoluteX) / width,
-			0,
-			1
-		)
-
-	CONFIG.FlySpeed =
-		CONFIG.FlySpeedMin
-		+ (
+	function(value)
+		CONFIG.FlySpeed = math.clamp(
+			math.floor(value + 0.5),
+			CONFIG.FlySpeedMin,
 			CONFIG.FlySpeedMax
-			- CONFIG.FlySpeedMin
-		) * alpha
+		)
+	end,
 
-	refreshSpeedSlider()
+	Color3.fromRGB(70, 210, 120)
+)
+
+---------------------------------------------------------------------
+-- ACTION BUTTON FACTORY
+---------------------------------------------------------------------
+
+local function createActionButton(text, callback)
+	local button = Instance.new("TextButton")
+	styleButton(button)
+
+	button.Text = text
+	button.BackgroundColor3 = Color3.fromRGB(28, 31, 40)
+	button.Parent = list
+
+	button.MouseButton1Click:Connect(callback)
+
+	return button
 end
 
-sliderTrack.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch
-	then
-		sliderDragging = true
-		setSpeedFromX(input.Position.X)
-	end
-end)
-
-sliderKnob.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch
-	then
-		sliderDragging = true
-		setSpeedFromX(input.Position.X)
-	end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-	if not sliderDragging then
-		return
-	end
-
-	if input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch
-	then
-		setSpeedFromX(input.Position.X)
-	end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch
-	then
-		sliderDragging = false
-	end
-end)
-
-refreshSpeedSlider()
-
-createToggle("Boost", "Boost")
-createToggle("Cruise Control", "Cruise")
-createToggle("Head Lights", "Lights")
-
----------------------------------------------------------------------
--- MANUAL FRONT DOOR
----------------------------------------------------------------------
-
-local frontButton = Instance.new("TextButton")
-styleButton(frontButton)
-frontButton.BackgroundColor3 = Color3.fromRGB(35, 42, 57)
-frontButton.Text = "CỬA TRƯỚC • MỞ / ĐÓNG"
-frontButton.Parent = list
-
-frontButton.MouseButton1Click:Connect(function()
-	if not currentSeat or processingStop then
-		return
-	end
-
-	if not parked then
-		return
-	end
-
+createActionButton("Front Door", function()
 	setDoor("FrontDoor", not frontDoorOpen)
 end)
 
----------------------------------------------------------------------
--- MANUAL REAR DOOR
----------------------------------------------------------------------
-
-local rearButton = Instance.new("TextButton")
-styleButton(rearButton)
-rearButton.BackgroundColor3 = Color3.fromRGB(35, 42, 57)
-rearButton.Text = "CỬA SAU • MỞ / ĐÓNG"
-rearButton.Parent = list
-
-rearButton.MouseButton1Click:Connect(function()
-	if not currentSeat or processingStop then
-		return
-	end
-
-	if not parked then
-		return
-	end
-
+createActionButton("Rear Door", function()
 	setDoor("RearDoor", not rearDoorOpen)
 end)
 
----------------------------------------------------------------------
--- PARK BUTTON
----------------------------------------------------------------------
-
-local parkButton = Instance.new("TextButton")
-styleButton(parkButton)
-parkButton.BackgroundColor3 = Color3.fromRGB(59, 47, 30)
-parkButton.Text = "PARK / RELEASE P"
-parkButton.Parent = list
-
-parkButton.MouseButton1Click:Connect(function()
-	if not currentSeat or processingStop then
-		return
-	end
-
-	if parked then
-		if frontDoorOpen or rearDoorOpen then
-			closeDoors()
-			task.wait(CONFIG.DoorCloseDelay)
-		end
-
-		setPark(false)
-
-	else
-		if getBusSpeed() <= 3 then
-			setPark(true)
-		end
-	end
-
-	refreshAllButtons()
+createActionButton("Open Both Doors", function()
+	openDoors()
 end)
 
----------------------------------------------------------------------
--- AUTO STOP
----------------------------------------------------------------------
+createActionButton("Close Both Doors", function()
+	closeDoors()
+end)
 
-local function performAutoStop(stop)
-	if processingStop or not currentSeat then
-		return
-	end
+createActionButton("Park / Release P", function()
+	setPark(not parked)
+end)
 
-	if stop == lastStop and os.clock() - lastStopTime < CONFIG.StopCooldown then
-		return
-	end
-
-	processingStop = true
-	autoParking = true
-
+createActionButton("Reset Speed To 75", function()
+	CONFIG.BusSpeed = CONFIG.BaseSpeed
 	Features.Boost = false
 	Features.Cruise = false
 	cruiseSpeed = 0
 
+	busSpeedSlider.Refresh()
 	refreshAllButtons()
+	applySpeedLimit()
 
-	-----------------------------------------------------------------
-	-- AUTO BRAKE
-	-----------------------------------------------------------------
-
-	while currentSeat
-		and currentSeat.Parent
-		and currentSeat.AssemblyLinearVelocity.Magnitude
-			> CONFIG.ParkSpeedThreshold
-	do
-		local velocity = currentSeat.AssemblyLinearVelocity
-
-		currentSeat.AssemblyLinearVelocity =
-			velocity * CONFIG.BrakeFactor
-
-		task.wait(0.06)
-	end
-
-	if not currentSeat then
-		autoParking = false
-		processingStop = false
-		return
-	end
-
-	currentSeat.AssemblyLinearVelocity = Vector3.zero
-	currentSeat.AssemblyAngularVelocity = Vector3.zero
-
-	-----------------------------------------------------------------
-	-- P
-	-----------------------------------------------------------------
-
-	setPark(true)
-	autoParking = false
-
-	-----------------------------------------------------------------
-	-- OPEN DOORS
-	-----------------------------------------------------------------
-
-	if Features.AutoDoors then
-		task.wait(0.4)
-		openDoors()
-	end
-
-	-----------------------------------------------------------------
-	-- DWELL
-	-----------------------------------------------------------------
-
-	task.wait(CONFIG.StopDuration)
-
-	if not currentSeat then
-		processingStop = false
-		return
-	end
-
-	-----------------------------------------------------------------
-	-- CLOSE DOORS
-	-----------------------------------------------------------------
-
-	if Features.AutoDoors then
-		closeDoors()
-		task.wait(CONFIG.DoorCloseDelay)
-	end
-
-	-----------------------------------------------------------------
-	-- RELEASE P
-	-----------------------------------------------------------------
-
-	if Features.AutoReleasePark then
-		setPark(false)
-	end
-
-	lastStop = stop
-	lastStopTime = os.clock()
-
-	processingStop = false
-end
+	notify(
+		"Axiom Bus Assist",
+		"Speed limit reset về 75."
+	)
+end)
 
 ---------------------------------------------------------------------
--- UI MINIMIZE
+-- MINIMIZE
 ---------------------------------------------------------------------
 
 local minimized = false
+local fullSize = main.Size
 
 minimize.MouseButton1Click:Connect(function()
 	minimized = not minimized
 
 	if minimized then
-		main.Size = UDim2.fromOffset(365, 58)
-		status.Visible = false
 		list.Visible = false
+		status.Visible = false
+		main.Size = UDim2.fromOffset(380, 58)
+		minimize.Text = "+"
 	else
-		main.Size = UDim2.fromOffset(365, 520)
-		status.Visible = true
 		list.Visible = true
+		status.Visible = true
+		main.Size = fullSize
+		minimize.Text = "—"
 	end
 end)
 
 ---------------------------------------------------------------------
--- DRAG UI
+-- DRAG WINDOW
 ---------------------------------------------------------------------
 
-local dragging = false
-local dragStart = nil
-local startPosition = nil
+do
+	local dragging = false
+	local dragStart = nil
+	local startPosition = nil
 
-header.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch
-	then
-		dragging = true
-		dragStart = input.Position
-		startPosition = main.Position
-	end
-end)
+	header.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			dragging = true
+			dragStart = input.Position
+			startPosition = main.Position
+		end
+	end)
 
-UserInputService.InputChanged:Connect(function(input)
-	if not dragging then
+	header.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			dragging = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragging or not dragStart or not startPosition then
+			return
+		end
+
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			local delta = input.Position - dragStart
+
+			main.Position =
+				UDim2.new(
+					startPosition.X.Scale,
+					startPosition.X.Offset + delta.X,
+					startPosition.Y.Scale,
+					startPosition.Y.Offset + delta.Y
+				)
+		end
+	end)
+end
+
+---------------------------------------------------------------------
+-- KEY SYSTEM
+---------------------------------------------------------------------
+
+local keyFrame = Instance.new("Frame")
+keyFrame.Name = "KeySystem"
+keyFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+keyFrame.Position = UDim2.fromScale(0.5, 0.5)
+keyFrame.Size = UDim2.fromOffset(350, 215)
+keyFrame.BackgroundColor3 = Color3.fromRGB(15, 17, 22)
+keyFrame.BorderSizePixel = 0
+keyFrame.Parent = gui
+
+local keyCorner = Instance.new("UICorner")
+keyCorner.CornerRadius = UDim.new(0, 16)
+keyCorner.Parent = keyFrame
+
+local keyStroke = Instance.new("UIStroke")
+keyStroke.Color = Color3.fromRGB(70, 75, 90)
+keyStroke.Transparency = 0.2
+keyStroke.Parent = keyFrame
+
+local keyTitle = Instance.new("TextLabel")
+keyTitle.Position = UDim2.fromOffset(20, 18)
+keyTitle.Size = UDim2.new(1, -40, 0, 30)
+keyTitle.BackgroundTransparency = 1
+keyTitle.Text = "AXIOM BUS ASSIST V2"
+keyTitle.TextColor3 = Color3.new(1, 1, 1)
+keyTitle.Font = Enum.Font.GothamBold
+keyTitle.TextSize = 18
+keyTitle.TextXAlignment = Enum.TextXAlignment.Left
+keyTitle.Parent = keyFrame
+
+local keySubtitle = Instance.new("TextLabel")
+keySubtitle.Position = UDim2.fromOffset(20, 48)
+keySubtitle.Size = UDim2.new(1, -40, 0, 20)
+keySubtitle.BackgroundTransparency = 1
+keySubtitle.Text = "Nhập key để mở bảng điều khiển"
+keySubtitle.TextColor3 = Color3.fromRGB(125, 135, 155)
+keySubtitle.Font = Enum.Font.GothamMedium
+keySubtitle.TextSize = 11
+keySubtitle.TextXAlignment = Enum.TextXAlignment.Left
+keySubtitle.Parent = keyFrame
+
+local keyInput = Instance.new("TextBox")
+keyInput.Position = UDim2.fromOffset(20, 86)
+keyInput.Size = UDim2.new(1, -40, 0, 43)
+keyInput.BackgroundColor3 = Color3.fromRGB(25, 28, 36)
+keyInput.BorderSizePixel = 0
+keyInput.PlaceholderText = "Key..."
+keyInput.Text = ""
+keyInput.ClearTextOnFocus = false
+keyInput.TextColor3 = Color3.new(1, 1, 1)
+keyInput.PlaceholderColor3 = Color3.fromRGB(100, 110, 130)
+keyInput.Font = Enum.Font.GothamMedium
+keyInput.TextSize = 13
+keyInput.Parent = keyFrame
+
+local keyInputCorner = Instance.new("UICorner")
+keyInputCorner.CornerRadius = UDim.new(0, 9)
+keyInputCorner.Parent = keyInput
+
+local loginButton = Instance.new("TextButton")
+loginButton.Position = UDim2.fromOffset(20, 143)
+loginButton.Size = UDim2.new(1, -40, 0, 42)
+loginButton.BackgroundColor3 = Color3.fromRGB(55, 105, 215)
+loginButton.BorderSizePixel = 0
+loginButton.Text = "UNLOCK"
+loginButton.TextColor3 = Color3.new(1, 1, 1)
+loginButton.Font = Enum.Font.GothamBold
+loginButton.TextSize = 13
+loginButton.Parent = keyFrame
+
+local loginCorner = Instance.new("UICorner")
+loginCorner.CornerRadius = UDim.new(0, 9)
+loginCorner.Parent = loginButton
+
+local authenticated = false
+
+local function cleanKey(value)
+	return string.upper(
+		value:gsub("%s+", "")
+	)
+end
+
+local function authenticate()
+	if authenticated then
 		return
 	end
 
-	if input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch
-	then
-		local delta = input.Position - dragStart
+	local entered = cleanKey(keyInput.Text)
 
-		main.Position = UDim2.new(
-			startPosition.X.Scale,
-			startPosition.X.Offset + delta.X,
-			startPosition.Y.Scale,
-			startPosition.Y.Offset + delta.Y
+	if entered == CONFIG.MasterKey then
+		authenticated = true
+
+		loginButton.Text = "ACCESS GRANTED"
+		loginButton.BackgroundColor3 = Color3.fromRGB(35, 130, 75)
+
+		task.wait(0.15)
+
+		keyFrame.Visible = false
+		main.Visible = true
+
+		notify(
+			"Axiom Bus Assist",
+			"Key accepted. Base speed = 75."
 		)
-	end
-end)
+	else
+		keyInput.Text = ""
+		keyInput.PlaceholderText = "KEY KHÔNG HỢP LỆ"
 
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch
-	then
-		dragging = false
+		local oldPosition = keyFrame.Position
+
+		for _ = 1, 3 do
+			keyFrame.Position = oldPosition + UDim2.fromOffset(6, 0)
+			task.wait(0.035)
+
+			keyFrame.Position = oldPosition - UDim2.fromOffset(6, 0)
+			task.wait(0.035)
+		end
+
+		keyFrame.Position = oldPosition
+	end
+end
+
+loginButton.MouseButton1Click:Connect(authenticate)
+
+keyInput.FocusLost:Connect(function(enterPressed)
+	if enterPressed then
+		authenticate()
 	end
 end)
 
 ---------------------------------------------------------------------
--- UI SHOW / HIDE KEY
+-- UI SHOW / HIDE
 ---------------------------------------------------------------------
 
 UserInputService.InputBegan:Connect(function(input, processed)
@@ -1232,8 +1438,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		return
 	end
 
-	if input.KeyCode == CONFIG.UIKey then
-		gui.Enabled = not gui.Enabled
+	if input.KeyCode == CONFIG.UIKey and authenticated then
+		main.Visible = not main.Visible
 	end
 end)
 
@@ -1245,6 +1451,8 @@ local function onVehicleChanged(newSeat)
 	if Features.Fly then
 		disableFly()
 	end
+
+	restoreBusCollision()
 
 	currentSeat = newSeat
 	currentBus = newSeat and findBusFromSeat(newSeat) or nil
@@ -1260,10 +1468,10 @@ local function onVehicleChanged(newSeat)
 	cruiseSpeed = 0
 
 	if currentSeat then
-		currentSeat.MaxSpeed = CONFIG.NormalSpeed
+		applySpeedLimit()
 
-		if Features.Fly then
-			enableFly()
+		if Features.NoclipBus then
+			applyBusNoclip()
 		end
 
 		if Features.Lights then
@@ -1280,7 +1488,7 @@ end
 
 RunService.RenderStepped:Connect(function(dt)
 	-----------------------------------------------------------------
-	-- DETECT VEHICLE
+	-- VEHICLE DETECTION
 	-----------------------------------------------------------------
 
 	local seat = getPlayerVehicleSeat()
@@ -1298,6 +1506,8 @@ RunService.RenderStepped:Connect(function(dt)
 		status.Text =
 			"BUS       : WAITING"
 			.. "\nSPEED     : 0 KM/H"
+			.. "\nLIMIT     : "
+			.. tostring(CONFIG.BusSpeed)
 			.. "\nGEAR      : -"
 			.. "\nAUTO PARK : READY"
 
@@ -1313,36 +1523,25 @@ RunService.RenderStepped:Connect(function(dt)
 	local kmh = studsPerSecondToKmh(speed)
 
 	-----------------------------------------------------------------
-	-- KEEP NO COLLISION
+	-- KEEP FEATURES ACTIVE
 	-----------------------------------------------------------------
+
+	if Features.NoclipBus then
+		applyBusNoclip()
+	end
 
 	if Features.Fly then
 		updateFly(dt)
 	end
 
 	-----------------------------------------------------------------
-	-- PARK / BOOST
+	-- SPEED LIMIT CONTROLLER
 	-----------------------------------------------------------------
 
-	if Features.Fly then
-		currentSeat.MaxSpeed = CONFIG.NormalSpeed
+	applySpeedLimit()
 
-	elseif parked then
-		currentSeat.MaxSpeed = 0
-
-		if speed < 3 then
-			currentSeat.AssemblyLinearVelocity = Vector3.zero
-		end
-
-	elseif frontDoorOpen or rearDoorOpen then
-		-- Door interlock
-		currentSeat.MaxSpeed = 0
-
-	elseif Features.Boost then
-		currentSeat.MaxSpeed = CONFIG.BoostSpeed
-
-	else
-		currentSeat.MaxSpeed = CONFIG.NormalSpeed
+	if parked and speed < 3 then
+		currentSeat.AssemblyLinearVelocity = Vector3.zero
 	end
 
 	-----------------------------------------------------------------
@@ -1426,6 +1625,8 @@ RunService.RenderStepped:Connect(function(dt)
 		.. "\nSPEED     : "
 		.. kmh
 		.. " KM/H"
+		.. "\nLIMIT     : "
+		.. tostring(getCurrentSpeedLimit())
 		.. "\nGEAR      : "
 		.. gear
 		.. "\nAUTO PARK : "
@@ -1443,6 +1644,8 @@ player.CharacterAdded:Connect(function()
 		disableFly()
 	end
 
+	restoreBusCollision()
+
 	currentBus = nil
 	currentSeat = nil
 	lastSeat = nil
@@ -1456,17 +1659,19 @@ player.CharacterAdded:Connect(function()
 
 	Features.Cruise = false
 	cruiseSpeed = 0
-
-	refreshAllButtons()
 end)
 
 ---------------------------------------------------------------------
--- INITIAL STATUS
+-- CLEANUP
 ---------------------------------------------------------------------
 
-refreshAllButtons()
+gui.Destroying:Connect(function()
+	destroyFlyObjects()
+	restoreBusCollision()
 
-print("===================================================")
-print("[AXIOM BUS ASSIST] ONLINE")
-print("[AXIOM] RightShift = Show / Hide UI")
-print("===================================================")
+	if Features.FixLag then
+		disableFixLag()
+	end
+end)
+
+print("[AXIOM] Bus Assist V2 loaded.")
