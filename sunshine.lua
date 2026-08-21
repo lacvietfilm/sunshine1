@@ -1,6 +1,6 @@
 --[[
 =====================================================================
-                 AXIOM BUS ASSIST V2 - FULL FILE
+                 AXIOM BUS ASSIST V4 - FULL FILE
 =====================================================================
 
 Dành cho Roblox Studio / place của bạn.
@@ -22,6 +22,8 @@ TÍNH NĂNG:
     - Key UI
     - Bus Speed slider
     - Noclip Bus
+    - Player Noclip
+    - Sun / Sunshards Manager
     - Boost
     - Cruise Control
     - Fly Bus
@@ -47,6 +49,7 @@ local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
 local TweenService = game:GetService("TweenService")
 local StarterGui = game:GetService("StarterGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -58,6 +61,10 @@ local playerGui = player:WaitForChild("PlayerGui")
 local CONFIG = {
 	MasterKey = "SEPDEPTRAI",
 	UIKey = Enum.KeyCode.RightShift,
+
+	SunRemoteName = "AxiomSetSunCurrency",
+	SunMin = 0,
+	SunMax = 999999,
 
 	-- Speed
 	BaseSpeed = 75,
@@ -105,6 +112,7 @@ local Features = {
 	AutoReleasePark = true,
 
 	NoclipBus = false,
+	PlayerNoclip = false,
 	Boost = false,
 	Cruise = false,
 	Fly = false,
@@ -450,6 +458,67 @@ local function setBusNoclip(enabled)
 	end
 end
 
+
+---------------------------------------------------------------------
+-- PLAYER NOCLIP
+---------------------------------------------------------------------
+
+local playerCollisionBackup = {}
+
+local function applyPlayerNoclip()
+	local character = player.Character
+
+	if not character then
+		return
+	end
+
+	for _, object in ipairs(character:GetDescendants()) do
+		if object:IsA("BasePart") then
+			if playerCollisionBackup[object] == nil then
+				playerCollisionBackup[object] = {
+					CanCollide = object.CanCollide,
+					CanTouch = object.CanTouch,
+					CanQuery = object.CanQuery,
+				}
+			end
+
+			object.CanCollide = false
+		end
+	end
+end
+
+local function restorePlayerCollision()
+	for part, old in pairs(playerCollisionBackup) do
+		if part and part.Parent and part:IsA("BasePart") then
+			part.CanCollide = old.CanCollide
+
+			pcall(function()
+				part.CanTouch = old.CanTouch
+				part.CanQuery = old.CanQuery
+			end)
+		end
+	end
+
+	table.clear(playerCollisionBackup)
+end
+
+local function setPlayerNoclip(enabled)
+	Features.PlayerNoclip = enabled
+
+	if enabled then
+		applyPlayerNoclip()
+	else
+		restorePlayerCollision()
+	end
+end
+
+-- Keep player noclip alive even while not seated in a bus.
+RunService.Stepped:Connect(function()
+	if Features.PlayerNoclip then
+		applyPlayerNoclip()
+	end
+end)
+
 ---------------------------------------------------------------------
 -- FLY SYSTEM
 ---------------------------------------------------------------------
@@ -785,7 +854,7 @@ local title = Instance.new("TextLabel")
 title.Position = UDim2.fromOffset(18, 9)
 title.Size = UDim2.new(1, -85, 0, 24)
 title.BackgroundTransparency = 1
-title.Text = "AXIOM BUS ASSIST V2"
+title.Text = "AXIOM BUS ASSIST V4"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 17
@@ -927,6 +996,9 @@ local function createToggle(label, feature)
 		elseif feature == "NoclipBus" then
 			setBusNoclip(Features.NoclipBus)
 
+		elseif feature == "PlayerNoclip" then
+			setPlayerNoclip(Features.PlayerNoclip)
+
 		elseif feature == "Fly" then
 			if Features.Fly then
 				enableFly()
@@ -980,6 +1052,7 @@ createToggle("Auto Park", "AutoPark")
 createToggle("Auto Doors", "AutoDoors")
 createToggle("Auto Release P", "AutoReleasePark")
 createToggle("Bus Noclip", "NoclipBus")
+createToggle("Player Noclip", "PlayerNoclip")
 createToggle("Boost", "Boost")
 createToggle("Cruise Control", "Cruise")
 createToggle("Fly", "Fly")
@@ -1225,6 +1298,284 @@ createActionButton("Reset Speed To 75", function()
 	)
 end)
 
+
+---------------------------------------------------------------------
+-- SUN / SUNSHARDS WINDOW
+---------------------------------------------------------------------
+
+local sunRemote = ReplicatedStorage:WaitForChild(CONFIG.SunRemoteName)
+
+local sunWindow = Instance.new("Frame")
+sunWindow.Name = "SunCurrencyWindow"
+sunWindow.AnchorPoint = Vector2.new(0.5, 0.5)
+sunWindow.Position = UDim2.fromScale(0.5, 0.5)
+sunWindow.Size = UDim2.fromOffset(370, 286)
+sunWindow.BackgroundColor3 = Color3.fromRGB(15, 17, 22)
+sunWindow.BorderSizePixel = 0
+sunWindow.Visible = false
+sunWindow.ZIndex = 100
+sunWindow.Parent = gui
+
+local sunWindowCorner = Instance.new("UICorner")
+sunWindowCorner.CornerRadius = UDim.new(0, 16)
+sunWindowCorner.Parent = sunWindow
+
+local sunWindowStroke = Instance.new("UIStroke")
+sunWindowStroke.Color = Color3.fromRGB(225, 177, 62)
+sunWindowStroke.Transparency = 0.25
+sunWindowStroke.Thickness = 1
+sunWindowStroke.Parent = sunWindow
+
+local sunTitle = Instance.new("TextLabel")
+sunTitle.Position = UDim2.fromOffset(20, 16)
+sunTitle.Size = UDim2.new(1, -75, 0, 28)
+sunTitle.BackgroundTransparency = 1
+sunTitle.Text = "SUN / SUNSHARDS"
+sunTitle.TextColor3 = Color3.fromRGB(255, 226, 120)
+sunTitle.Font = Enum.Font.GothamBold
+sunTitle.TextSize = 19
+sunTitle.TextXAlignment = Enum.TextXAlignment.Left
+sunTitle.ZIndex = 101
+sunTitle.Parent = sunWindow
+
+local sunDesc = Instance.new("TextLabel")
+sunDesc.Position = UDim2.fromOffset(20, 45)
+sunDesc.Size = UDim2.new(1, -40, 0, 20)
+sunDesc.BackgroundTransparency = 1
+sunDesc.Text = "Nhập số Sun muốn có • tối đa 999999"
+sunDesc.TextColor3 = Color3.fromRGB(145, 150, 165)
+sunDesc.Font = Enum.Font.GothamMedium
+sunDesc.TextSize = 11
+sunDesc.TextXAlignment = Enum.TextXAlignment.Left
+sunDesc.ZIndex = 101
+sunDesc.Parent = sunWindow
+
+local sunClose = Instance.new("TextButton")
+sunClose.Position = UDim2.new(1, -48, 0, 13)
+sunClose.Size = UDim2.fromOffset(34, 34)
+sunClose.BackgroundColor3 = Color3.fromRGB(34, 37, 47)
+sunClose.BorderSizePixel = 0
+sunClose.Text = "×"
+sunClose.TextColor3 = Color3.new(1, 1, 1)
+sunClose.Font = Enum.Font.GothamBold
+sunClose.TextSize = 20
+sunClose.ZIndex = 102
+sunClose.Parent = sunWindow
+
+local sunCloseCorner = Instance.new("UICorner")
+sunCloseCorner.CornerRadius = UDim.new(0, 9)
+sunCloseCorner.Parent = sunClose
+
+local sunInput = Instance.new("TextBox")
+sunInput.Position = UDim2.fromOffset(20, 82)
+sunInput.Size = UDim2.new(1, -40, 0, 52)
+sunInput.BackgroundColor3 = Color3.fromRGB(24, 27, 35)
+sunInput.BorderSizePixel = 0
+sunInput.Text = ""
+sunInput.PlaceholderText = "Ví dụ: 999999"
+sunInput.ClearTextOnFocus = false
+sunInput.TextColor3 = Color3.fromRGB(255, 235, 160)
+sunInput.PlaceholderColor3 = Color3.fromRGB(98, 103, 118)
+sunInput.Font = Enum.Font.GothamBold
+sunInput.TextSize = 18
+sunInput.ZIndex = 101
+sunInput.Parent = sunWindow
+
+local sunInputCorner = Instance.new("UICorner")
+sunInputCorner.CornerRadius = UDim.new(0, 10)
+sunInputCorner.Parent = sunInput
+
+sunInput:GetPropertyChangedSignal("Text"):Connect(function()
+	local filtered = sunInput.Text:gsub("[^0-9]", "")
+
+	if filtered ~= sunInput.Text then
+		sunInput.Text = filtered
+	end
+
+	local number = tonumber(filtered)
+
+	if number and number > CONFIG.SunMax then
+		sunInput.Text = tostring(CONFIG.SunMax)
+	end
+end)
+
+local quickHolder = Instance.new("Frame")
+quickHolder.Position = UDim2.fromOffset(20, 147)
+quickHolder.Size = UDim2.new(1, -40, 0, 34)
+quickHolder.BackgroundTransparency = 1
+quickHolder.ZIndex = 101
+quickHolder.Parent = sunWindow
+
+local quickLayout = Instance.new("UIListLayout")
+quickLayout.FillDirection = Enum.FillDirection.Horizontal
+quickLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+quickLayout.Padding = UDim.new(0, 7)
+quickLayout.Parent = quickHolder
+
+local function makeSunQuick(label, amount)
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(0.25, -6, 1, 0)
+	button.BackgroundColor3 = Color3.fromRGB(31, 35, 44)
+	button.BorderSizePixel = 0
+	button.Text = label
+	button.TextColor3 = Color3.fromRGB(220, 224, 232)
+	button.Font = Enum.Font.GothamMedium
+	button.TextSize = 11
+	button.ZIndex = 102
+	button.Parent = quickHolder
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = button
+
+	button.MouseButton1Click:Connect(function()
+		sunInput.Text = tostring(amount)
+	end)
+end
+
+makeSunQuick("10K", 10000)
+makeSunQuick("100K", 100000)
+makeSunQuick("500K", 500000)
+makeSunQuick("MAX", 999999)
+
+local sunStatus = Instance.new("TextLabel")
+sunStatus.Position = UDim2.fromOffset(20, 188)
+sunStatus.Size = UDim2.new(1, -40, 0, 22)
+sunStatus.BackgroundTransparency = 1
+sunStatus.Text = "Currency alias: Sunshards / Sun"
+sunStatus.TextColor3 = Color3.fromRGB(130, 136, 150)
+sunStatus.Font = Enum.Font.GothamMedium
+sunStatus.TextSize = 11
+sunStatus.TextXAlignment = Enum.TextXAlignment.Left
+sunStatus.ZIndex = 101
+sunStatus.Parent = sunWindow
+
+local sunApply = Instance.new("TextButton")
+sunApply.Position = UDim2.fromOffset(20, 220)
+sunApply.Size = UDim2.new(1, -40, 0, 44)
+sunApply.BackgroundColor3 = Color3.fromRGB(198, 151, 43)
+sunApply.BorderSizePixel = 0
+sunApply.Text = "APPLY SUN"
+sunApply.TextColor3 = Color3.fromRGB(15, 15, 18)
+sunApply.Font = Enum.Font.GothamBold
+sunApply.TextSize = 13
+sunApply.ZIndex = 102
+sunApply.Parent = sunWindow
+
+local sunApplyCorner = Instance.new("UICorner")
+sunApplyCorner.CornerRadius = UDim.new(0, 10)
+sunApplyCorner.Parent = sunApply
+
+local sunRequestBusy = false
+
+local function requestSunAmount()
+	if sunRequestBusy then
+		return
+	end
+
+	local amount = tonumber(sunInput.Text)
+
+	if not amount then
+		sunStatus.Text = "Nhập số hợp lệ."
+		sunStatus.TextColor3 = Color3.fromRGB(255, 105, 105)
+		return
+	end
+
+	amount = math.clamp(
+		math.floor(amount),
+		CONFIG.SunMin,
+		CONFIG.SunMax
+	)
+
+	sunInput.Text = tostring(amount)
+	sunRequestBusy = true
+
+	sunApply.Text = "ĐANG ÁP DỤNG..."
+	sunApply.AutoButtonColor = false
+
+	local ok, result = pcall(function()
+		return sunRemote:InvokeServer(amount)
+	end)
+
+	if ok and type(result) == "table" and result.ok then
+		local aliases = result.aliases or "Sun"
+		local finalValue = result.value or amount
+
+		sunStatus.Text =
+			"✓ "
+			.. aliases
+			.. " = "
+			.. tostring(finalValue)
+			.. " / "
+			.. tostring(CONFIG.SunMax)
+
+		sunStatus.TextColor3 = Color3.fromRGB(92, 235, 145)
+		sunApply.Text = "✓ ĐÃ ÁP DỤNG"
+	else
+		local message =
+			type(result) == "table" and result.message
+			or "Server không phản hồi."
+
+		sunStatus.Text = "✕ " .. tostring(message)
+		sunStatus.TextColor3 = Color3.fromRGB(255, 105, 105)
+		sunApply.Text = "THỬ LẠI"
+	end
+
+	task.delay(0.9, function()
+		if sunApply and sunApply.Parent then
+			sunApply.Text = "APPLY SUN"
+			sunApply.AutoButtonColor = true
+		end
+
+		sunRequestBusy = false
+	end)
+end
+
+sunApply.MouseButton1Click:Connect(requestSunAmount)
+
+sunInput.FocusLost:Connect(function(enterPressed)
+	if enterPressed then
+		requestSunAmount()
+	end
+end)
+
+sunClose.MouseButton1Click:Connect(function()
+	sunWindow.Visible = false
+end)
+
+local function refreshSunBalance()
+	sunStatus.Text = "Đang đọc Sun / Sunshards..."
+	sunStatus.TextColor3 = Color3.fromRGB(130, 136, 150)
+
+	local ok, result = pcall(function()
+		return sunRemote:InvokeServer("GET")
+	end)
+
+	if ok and type(result) == "table" and result.ok then
+		sunStatus.Text =
+			"Hiện tại: "
+			.. tostring(result.value or 0)
+			.. " • "
+			.. tostring(result.aliases or "Sun")
+
+		sunStatus.TextColor3 = Color3.fromRGB(110, 220, 160)
+	else
+		sunStatus.Text = "Không đọc được số dư hiện tại."
+		sunStatus.TextColor3 = Color3.fromRGB(255, 120, 120)
+	end
+end
+
+createActionButton("Sun / Sunshards Manager", function()
+	sunWindow.Visible = true
+	refreshSunBalance()
+	task.defer(function()
+		if sunInput and sunInput.Parent then
+			sunInput:CaptureFocus()
+		end
+	end)
+end)
+
+
 ---------------------------------------------------------------------
 -- MINIMIZE
 ---------------------------------------------------------------------
@@ -1322,7 +1673,7 @@ local keyTitle = Instance.new("TextLabel")
 keyTitle.Position = UDim2.fromOffset(20, 18)
 keyTitle.Size = UDim2.new(1, -40, 0, 30)
 keyTitle.BackgroundTransparency = 1
-keyTitle.Text = "AXIOM BUS ASSIST V2"
+keyTitle.Text = "AXIOM BUS ASSIST V4"
 keyTitle.TextColor3 = Color3.new(1, 1, 1)
 keyTitle.Font = Enum.Font.GothamBold
 keyTitle.TextSize = 18
@@ -1530,6 +1881,10 @@ RunService.RenderStepped:Connect(function(dt)
 		applyBusNoclip()
 	end
 
+	if Features.PlayerNoclip then
+		applyPlayerNoclip()
+	end
+
 	if Features.Fly then
 		updateFly(dt)
 	end
@@ -1645,6 +2000,7 @@ player.CharacterAdded:Connect(function()
 	end
 
 	restoreBusCollision()
+	restorePlayerCollision()
 
 	currentBus = nil
 	currentSeat = nil
@@ -1668,6 +2024,7 @@ end)
 gui.Destroying:Connect(function()
 	destroyFlyObjects()
 	restoreBusCollision()
+	restorePlayerCollision()
 
 	if Features.FixLag then
 		disableFixLag()
